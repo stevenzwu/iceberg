@@ -138,10 +138,11 @@ subprojects {
     def buildLog = new File(logFile)
     addTestOutputListener(new TestOutputListener() {
       def lastDescriptor
+
       @Override
       void onOutput(TestDescriptor testDescriptor, TestOutputEvent testOutputEvent) {
         if (lastDescriptor != testDescriptor) {
-          buildLog << "--------\n- Test log for: "<< testDescriptor << "\n--------\n"
+          buildLog << "--------\n- Test log for: " << testDescriptor << "\n--------\n"
           lastDescriptor = testDescriptor
         }
         buildLog << testOutputEvent.destination << " " << testOutputEvent.message
@@ -330,15 +331,15 @@ project(':iceberg-aws') {
 
 project(':iceberg-flink') {
   dependencies {
-    implementation project(path: ':iceberg-bundled-guava', configuration: 'shadow')
-    api project(':iceberg-api')
-    implementation project(':iceberg-common')
-    implementation project(':iceberg-core')
-    api project(':iceberg-data')
-    implementation project(':iceberg-orc')
-    implementation project(':iceberg-parquet')
-    implementation project(':iceberg-hive-metastore')
+    compile project(':iceberg-api')
+    compile project(':iceberg-common')
+    compile project(':iceberg-core')
+    compile project(':iceberg-data')
+    compile project(':iceberg-orc')
+    compile project(':iceberg-parquet')
+    compile project(':iceberg-hive-metastore')
 
+    compileOnly "org.apache.flink:flink-connector-base"
     compileOnly "org.apache.flink:flink-streaming-java_2.12"
     compileOnly "org.apache.flink:flink-streaming-java_2.12::tests"
     compileOnly "org.apache.flink:flink-table-api-java-bridge_2.12"
@@ -350,44 +351,29 @@ project(':iceberg-flink') {
       exclude group: 'org.apache.avro', module: 'avro'
     }
 
-    implementation("org.apache.parquet:parquet-avro") {
-      exclude group: 'org.apache.avro', module: 'avro'
-      // already shaded by Parquet
-      exclude group: 'it.unimi.dsi'
-      exclude group: 'org.codehaus.jackson'
-    }
-
-    compileOnly "org.apache.avro:avro"
-
-    implementation("org.apache.orc:orc-core::nohive") {
-      exclude group: 'org.apache.hadoop'
-      exclude group: 'commons-lang'
-      // These artifacts are shaded and included in the orc-core fat jar
-      exclude group: 'com.google.protobuf', module: 'protobuf-java'
-      exclude group: 'org.apache.hive', module: 'hive-storage-api'
-    }
-
-    testImplementation "org.apache.flink:flink-core"
-    testImplementation "org.apache.flink:flink-runtime_2.12"
-    testImplementation "org.apache.flink:flink-table-planner-blink_2.12"
-    testImplementation ("org.apache.flink:flink-test-utils-junit") {
+    testCompile "org.apache.flink:flink-connector-test-utils"
+    testCompile "org.apache.flink:flink-core"
+    testCompile "org.apache.flink:flink-runtime_2.12"
+    testCompile "org.apache.flink:flink-streaming-java_2.12"
+    testCompile "org.apache.flink:flink-table-planner-blink_2.12"
+    testCompile ("org.apache.flink:flink-test-utils-junit") {
       exclude group: 'junit'
     }
-    testImplementation("org.apache.flink:flink-test-utils_2.12") {
+    testCompile("org.apache.flink:flink-test-utils_2.12") {
       exclude group: "org.apache.curator", module: 'curator-test'
       exclude group: 'junit'
     }
 
-    testImplementation project(path: ':iceberg-hive-metastore', configuration: 'testArtifacts')
-    testImplementation project(path: ':iceberg-api', configuration: 'testArtifacts')
-    testImplementation project(path: ':iceberg-core', configuration: 'testArtifacts')
-    testImplementation project(path: ':iceberg-data', configuration: 'testArtifacts')
+    testCompile project(path: ':iceberg-hive-metastore', configuration: 'testArtifacts')
+    testCompile project(path: ':iceberg-api', configuration: 'testArtifacts')
+    testCompile project(path: ':iceberg-core', configuration: 'testArtifacts')
+    testCompile project(path: ':iceberg-data', configuration: 'testArtifacts')
 
     // By default, hive-exec is a fat/uber jar and it exports a guava library
     // that's really old. We use the core classifier to be able to override our guava
     // version. Luckily, hive-exec seems to work okay so far with this version of guava
     // See: https://github.com/apache/hive/blob/master/ql/pom.xml#L911 for more context.
-    testImplementation("org.apache.hive:hive-exec::core") {
+    testCompile("org.apache.hive:hive-exec::core") {
       exclude group: 'org.apache.avro', module: 'avro'
       exclude group: 'org.slf4j', module: 'slf4j-log4j12'
       exclude group: 'org.pentaho' // missing dependency
@@ -399,7 +385,7 @@ project(':iceberg-flink') {
       exclude group: 'com.google.code.findbugs', module: 'jsr305'
     }
 
-    testImplementation("org.apache.hive:hive-metastore") {
+    testCompile("org.apache.hive:hive-metastore") {
       exclude group: 'org.apache.avro', module: 'avro'
       exclude group: 'org.slf4j', module: 'slf4j-log4j12'
       exclude group: 'org.pentaho' // missing dependency
@@ -423,8 +409,7 @@ project(':iceberg-flink-runtime') {
   tasks.jar.dependsOn tasks.shadowJar
 
   configurations {
-    implementation {
-      exclude group: 'org.apache.flink'
+    compile {
       // included in Flink
       exclude group: 'org.slf4j'
       exclude group: 'org.apache.commons'
@@ -437,15 +422,17 @@ project(':iceberg-flink-runtime') {
   }
 
   dependencies {
-    implementation project(':iceberg-flink')
-    implementation project(':iceberg-aws')
-    implementation(project(':iceberg-nessie')) {
+    compile project(':iceberg-flink')
+    compile project(':iceberg-aws')
+    compile(project(':iceberg-nessie')) {
       exclude group: 'com.google.code.findbugs', module: 'jsr305'
     }
+
+    compile "org.apache.flink:flink-connector-base"
   }
 
   shadowJar {
-    configurations = [project.configurations.runtimeClasspath]
+    configurations = [project.configurations.compile]
 
     zip64 true
 

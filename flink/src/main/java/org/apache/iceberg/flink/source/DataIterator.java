@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.Iterator;
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.connector.file.src.util.CheckpointedPosition;
 import org.apache.iceberg.CombinedScanTask;
 import org.apache.iceberg.FileScanTask;
 import org.apache.iceberg.encryption.EncryptionManager;
@@ -39,10 +40,12 @@ import org.apache.iceberg.io.FileIO;
 public class DataIterator<T> implements CloseableIterator<T> {
 
   private final FileScanTaskReader<T> fileScanTaskReader;
-
   private final InputFilesDecryptor inputFilesDecryptor;
+
   private Iterator<FileScanTask> tasks;
   private CloseableIterator<T> currentIterator;
+  private Position position;
+
 
   public DataIterator(FileScanTaskReader<T> fileScanTaskReader, CombinedScanTask task,
                       FileIO io, EncryptionManager encryption) {
@@ -51,6 +54,28 @@ public class DataIterator<T> implements CloseableIterator<T> {
     this.inputFilesDecryptor = new InputFilesDecryptor(task, io, encryption);
     this.tasks = task.files().iterator();
     this.currentIterator = CloseableIterator.empty();
+    this.position = new Position();
+  }
+
+  public void seek(CheckpointedPosition checkpointedPosition)  {
+    // skip files
+    Preconditions.checkArgument(checkpointedPosition.getOffset() < combinedTask.files().size(),
+        "Checkpointed file offset is %d, while CombinedScanTask has %d files",
+            checkpointedPosition.getOffset(), combinedTask.files().size());
+    for (long i = 0L; i < checkpointedPosition.getOffset(); ++i) {
+      tasks.next();
+    }
+    updateCurrentIterator();
+    // skip records within the file
+    for (long i = 0; i < checkpointedPosition.getRecordsAfterOffset(); ++i) {
+      if (hasNext()) {
+        next();
+      } else {
+        throw new IllegalStateException("Not enough records to skip: " +
+            checkpointedPosition.getRecordsAfterOffset());
+      }
+    }
+    position = new Position(checkpointedPosition);
   }
 
   @Override
@@ -62,7 +87,12 @@ public class DataIterator<T> implements CloseableIterator<T> {
   @Override
   public T next() {
     updateCurrentIterator();
+    position.advanceRecord();
     return currentIterator.next();
+  }
+
+  public boolean isCurrentIteratorDone() {
+    return !currentIterator.hasNext();
   }
 
   /**
@@ -74,6 +104,7 @@ public class DataIterator<T> implements CloseableIterator<T> {
       while (!currentIterator.hasNext() && tasks.hasNext()) {
         currentIterator.close();
         currentIterator = openTaskIterator(tasks.next());
+        position.advanceFile();
       }
     } catch (IOException e) {
       throw new UncheckedIOException(e);
