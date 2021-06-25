@@ -65,4 +65,16 @@ public class GetSplitResult {
   public IcebergSourceSplit split() {
     return split;
   }
+
+  private static final GetSplitResult UNAVAILABLE = new GetSplitResult(Status.UNAVAILABLE);
+
+  public static GetSplitResult unavailable() {
+    return UNAVAILABLE;
+  }
+
+  private static final GetSplitResult CONSTRAINED = new GetSplitResult(Status.CONSTRAINED);
+
+  public static GetSplitResult constrained() {
+    return CONSTRAINED;
+  }
 }
