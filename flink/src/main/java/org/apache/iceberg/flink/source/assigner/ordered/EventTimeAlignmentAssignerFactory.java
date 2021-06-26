@@ -58,7 +58,10 @@ public class EventTimeAlignmentAssignerFactory implements SplitAssignerFactory {
 
   @Override
   public EventTimeAlignmentAssigner createAssigner(Map<IcebergSourceSplit, IcebergSourceSplit.Status> state) {
-    return new EventTimeAlignmentAssigner(maxMisalignmentThreshold, state, trackerFactory.<String>apply("iceberg").forPartition(sourceName),
-        timestampAssigner, clockFactory.get());
+    return new EventTimeAlignmentAssigner(maxMisalignmentThreshold,
+        state,
+        trackerFactory.<String>apply("iceberg").forPartition(sourceName),
+        timestampAssigner,
+        clockFactory.get());
   }
 }

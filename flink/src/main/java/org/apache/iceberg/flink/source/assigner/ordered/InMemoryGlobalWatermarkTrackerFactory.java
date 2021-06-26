@@ -19,9 +19,9 @@
 
 package org.apache.iceberg.flink.source.assigner.ordered;
 
-import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import java.util.HashMap;
 import java.util.Map;
+import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 
 /**
  * GlobalWatermarkTracker Factory that caches the issued trackers. The caching is required because
@@ -35,14 +35,14 @@ public class InMemoryGlobalWatermarkTrackerFactory implements GlobalWatermarkTra
   // private final Supplier<Registry> registrySupplier;
 
   @SuppressWarnings("unchecked")
-  public synchronized <PartitionType> GlobalWatermarkTracker<PartitionType> apply(String name) {
-    return (GlobalWatermarkTracker<PartitionType>)
+  public synchronized <PartitionT> GlobalWatermarkTracker<PartitionT> apply(String name) {
+    return (GlobalWatermarkTracker<PartitionT>)
         trackerCache.computeIfAbsent(
             name, dontCare -> new InMemoryGlobalWatermarkTracker<>());
   }
 
   @VisibleForTesting
-  public static void clear() {
+  static void clear() {
     trackerCache.clear();
   }
 }

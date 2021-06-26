@@ -19,9 +19,6 @@
 
 package org.apache.iceberg.flink.source.assigner.ordered;
 
-import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
-import org.apache.iceberg.relocated.com.google.common.base.MoreObjects;
-import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import java.io.Serializable;
 import java.time.Clock;
 import java.time.Instant;
@@ -39,6 +36,9 @@ import javax.annotation.Nullable;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplit.Status;
+import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
+import org.apache.iceberg.relocated.com.google.common.base.MoreObjects;
+import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -117,10 +117,8 @@ class EventTimeAlignmentAssignerState {
     if (!splits.isEmpty()) {
       splits
           .forEach(
-              (split) -> {
-                Preconditions.checkArgument(splitStateMap.get(split.splitId()).assignTo(hostName)
-                    == IcebergSourceSplit.Status.UNASSIGNED);
-              });
+              split -> Preconditions.checkArgument(splitStateMap.get(split.splitId()).assignTo(hostName) ==
+                  Status.UNASSIGNED));
 
       numAssignedSplits += splits.size();
       updateTs();
@@ -202,7 +200,7 @@ class EventTimeAlignmentAssignerState {
   }
 
   @VisibleForTesting
-  public synchronized Collection<IcebergSourceSplit> getUnassignedSplits() {
+  synchronized Collection<IcebergSourceSplit> getUnassignedSplits() {
     return splitStateMap
         .values()
         .stream()
@@ -275,9 +273,9 @@ class EventTimeAlignmentAssignerState {
                     subtaskId,
                     (dontCare, oldValue) -> {
                       if (oldValue == null) {
-                        List<IcebergSourceSplit> r = new ArrayList<>();
-                        r.add(splitState.getSplit());
-                        return r;
+                        List<IcebergSourceSplit> temp = new ArrayList<>();
+                        temp.add(splitState.getSplit());
+                        return temp;
                       } else {
                         oldValue.add(splitState.getSplit());
                         return oldValue;
@@ -293,7 +291,7 @@ class EventTimeAlignmentAssignerState {
   public boolean isTerminal() {
     // check if there are no more splits to be added by the system
     // check if all the splits have been completed
-    return (noMoreSplits && numCompletedSplits == splitStateMap.size());
+    return noMoreSplits && numCompletedSplits == splitStateMap.size();
   }
 
   public synchronized Stats getStats() {
@@ -304,14 +302,14 @@ class EventTimeAlignmentAssignerState {
         splitStateMap.size());
   }
 
-  static class Stats {
+  public static class Stats {
 
-    int numUnassignedSplits;
-    int numAssignedSplits;
-    int numCompletedSplits;
-    int numTotalSplits;
+    private final int numUnassignedSplits;
+    private final int numAssignedSplits;
+    private final int numCompletedSplits;
+    private final int numTotalSplits;
 
-    public Stats(int numUnassignedSplits, int numAssignedSplits, int numCompletedSplits, int numTotalSplits) {
+    Stats(int numUnassignedSplits, int numAssignedSplits, int numCompletedSplits, int numTotalSplits) {
       this.numUnassignedSplits = numUnassignedSplits;
       this.numAssignedSplits = numAssignedSplits;
       this.numCompletedSplits = numCompletedSplits;
@@ -341,7 +339,7 @@ class EventTimeAlignmentAssignerState {
     private IcebergSourceSplit.Status status;
     private String subtaskId;
 
-    public SplitState(IcebergSourceSplit split, IcebergSourceSplit.Status status) {
+    SplitState(IcebergSourceSplit split, IcebergSourceSplit.Status status) {
       this.split = split;
       this.status = status;
       this.subtaskId = null;

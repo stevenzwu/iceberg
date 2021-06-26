@@ -19,8 +19,6 @@
 
 package org.apache.iceberg.flink.source.assigner.ordered;
 
-import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
-import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Collection;
@@ -32,6 +30,8 @@ import org.apache.flink.api.common.eventtime.TimestampAssigner;
 import org.apache.iceberg.flink.source.assigner.GetSplitResult;
 import org.apache.iceberg.flink.source.assigner.SplitAssigner;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
+import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
+import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -88,7 +88,7 @@ class EventTimeAlignmentAssigner implements SplitAssigner, WatermarkTracker.List
     try {
       Long watermark = watermarkTracker.getGlobalWatermark();
 
-      for (IcebergSourceSplit pendingSplit : assignerState.getUnassignedSplits()) {
+      for (IcebergSourceSplit pendingSplit : unassignedSplitsMaintainer.getUnassignedSplits()) {
         // break early if you encounter a split that's ahead of the misalignment threshold.
         if (!isWithinBounds(pendingSplit, watermark)) {
           log.info(

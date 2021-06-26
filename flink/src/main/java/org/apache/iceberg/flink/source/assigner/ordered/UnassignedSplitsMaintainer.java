@@ -70,5 +70,6 @@ class UnassignedSplitsMaintainer
   }
 
   @Override
-  public void onNoMoreStatusChanges() {}
+  public void onNoMoreStatusChanges() {
+  }
 }

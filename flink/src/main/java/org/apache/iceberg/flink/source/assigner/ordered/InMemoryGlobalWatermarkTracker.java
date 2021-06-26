@@ -19,9 +19,6 @@
 
 package org.apache.iceberg.flink.source.assigner.ordered;
 
-import org.apache.iceberg.relocated.com.google.common.base.MoreObjects;
-import org.apache.iceberg.relocated.com.google.common.base.MoreObjects.ToStringHelper;
-import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import java.io.Serializable;
 import java.util.Comparator;
 import java.util.Map.Entry;
@@ -30,6 +27,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.annotation.Nullable;
+import org.apache.iceberg.relocated.com.google.common.base.MoreObjects;
+import org.apache.iceberg.relocated.com.google.common.base.MoreObjects.ToStringHelper;
+import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -43,11 +43,11 @@ import org.slf4j.LoggerFactory;
  *
  * @param <Partition> type of the partition
  */
-class InMemoryGlobalWatermarkTracker<Partition> implements GlobalWatermarkTracker<Partition> {
+class InMemoryGlobalWatermarkTracker<PartitionT> implements GlobalWatermarkTracker<PartitionT> {
   private static final Logger log = LoggerFactory.getLogger(InMemoryGlobalWatermarkTracker.class);
 
-  private final ConcurrentMap<Partition, PartitionWatermarkState> acc = new ConcurrentHashMap<>();
-  private final ConcurrentMap<Partition, WeakHashMap<WatermarkTracker.Listener, Void>> listeners =
+  private final ConcurrentMap<PartitionT, PartitionWatermarkState> acc = new ConcurrentHashMap<>();
+  private final ConcurrentMap<PartitionT, WeakHashMap<WatermarkTracker.Listener, Void>> listeners =
       new ConcurrentHashMap<>();
   private final AtomicReference<Long> globalWatermark = new AtomicReference<>();
   // private final Registry registry;
@@ -72,7 +72,7 @@ class InMemoryGlobalWatermarkTracker<Partition> implements GlobalWatermarkTracke
         });
   }
 
-  private void updateWatermarkAndInformListeners(Partition updatedPartition) {
+  private void updateWatermarkAndInformListeners(PartitionT updatedPartitionT) {
     Long v1 = globalWatermark.get();
     Long v2 = updateAndGet();
 
@@ -80,7 +80,7 @@ class InMemoryGlobalWatermarkTracker<Partition> implements GlobalWatermarkTracke
       listeners
           .entrySet()
           .stream()
-          .filter(entry -> !entry.getKey().equals(updatedPartition))
+          .filter(entry -> !entry.getKey().equals(updatedPartitionT))
           .forEach(
               entry -> {
                 entry.getValue().keySet().forEach(listener -> listener.onWatermarkChange(v2));
@@ -99,15 +99,14 @@ class InMemoryGlobalWatermarkTracker<Partition> implements GlobalWatermarkTracke
   private void updateGauges() {
     try {
       ToStringHelper helper = MoreObjects.toStringHelper(this);
-      for (Entry<Partition, PartitionWatermarkState> entry : acc.entrySet()) {
-        Partition p = entry.getKey();
-        PartitionWatermarkState v = entry.getValue();
-        helper = helper.add(p.toString(), v.toString());
+      for (Entry<PartitionT, PartitionWatermarkState> entry : acc.entrySet()) {
+        PartitionT partition = entry.getKey();
+        PartitionWatermarkState partitionWatermarkState = entry.getValue();
+        helper = helper.add(partition.toString(), partitionWatermarkState.toString());
         // getWatermarkGaugeFor(p.toString()).set(v.getWatermark());
       }
 
-      Long globalWatermark = getGlobalWatermark();
-      helper.add("global", globalWatermark);
+      helper.add("global", getGlobalWatermark());
       log.info("watermarkState={}", helper.toString());
       // if (globalWatermark != null) {
       //   getWatermarkGaugeFor("global").set(globalWatermark);
@@ -118,54 +117,54 @@ class InMemoryGlobalWatermarkTracker<Partition> implements GlobalWatermarkTracke
   }
 
   @Override
-  public Long updateWatermarkForPartition(Partition partition, long watermark) throws Exception {
-    log.info("Updating watermark tracker to {} for partition {}", watermark, partition);
+  public Long updateWatermarkForPartition(PartitionT partitionT, long watermark) throws Exception {
+    log.info("Updating watermark tracker to {} for partition {}", watermark, partitionT);
     acc.compute(
-        partition,
+        partitionT,
         (dontCare, oldState) ->
             PartitionWatermarkState.max(oldState, new PartitionWatermarkState(watermark, false)));
-    updateWatermarkAndInformListeners(partition);
+    updateWatermarkAndInformListeners(partitionT);
     return getGlobalWatermark();
   }
 
   @Override
-  public void onPartitionCompletion(Partition partition) throws Exception {
-    log.info("Marking partition {} as complete", partition);
+  public void onPartitionCompletion(PartitionT partitionT) throws Exception {
+    log.info("Marking partition {} as complete", partitionT);
     acc.compute(
-        partition,
+        partitionT,
         (dontCare, oldState) ->
             PartitionWatermarkState.max(
                 oldState, new PartitionWatermarkState(Long.MIN_VALUE, true)));
-    updateWatermarkAndInformListeners(partition);
+    updateWatermarkAndInformListeners(partitionT);
   }
 
   @Override
-  public void onPartitionInitialization(Partition partition) {
-    acc.remove(partition);
-    listeners.remove(partition);
-    updateWatermarkAndInformListeners(partition);
+  public void onPartitionInitialization(PartitionT partitionT) {
+    acc.remove(partitionT);
+    listeners.remove(partitionT);
+    updateWatermarkAndInformListeners(partitionT);
   }
 
   @Override
-  public void addListener(Partition partition, WatermarkTracker.Listener listener) {
+  public void addListener(PartitionT partitionT, WatermarkTracker.Listener listener) {
     listeners.compute(
-        partition,
+        partitionT,
         (dontCare, oldValue) -> {
           if (oldValue != null) {
             oldValue.put(listener, null);
             return oldValue;
           } else {
-            WeakHashMap<WatermarkTracker.Listener, Void> l = new WeakHashMap<>();
-            l.put(listener, null);
-            return l;
+            WeakHashMap<WatermarkTracker.Listener, Void> temp = new WeakHashMap<>();
+            temp.put(listener, null);
+            return temp;
           }
         });
   }
 
   @Override
-  public void removeListener(Partition partition, WatermarkTracker.Listener listener) {
+  public void removeListener(PartitionT partitionT, WatermarkTracker.Listener listener) {
     listeners.compute(
-        partition,
+        partitionT,
         (dontCare, oldValue) -> {
           Preconditions.checkArgument(
               oldValue != null && oldValue.containsKey(listener), "listener not found");
@@ -181,11 +180,11 @@ class InMemoryGlobalWatermarkTracker<Partition> implements GlobalWatermarkTracke
 
   static class PartitionWatermarkState implements Serializable {
 
-    Long watermark;
+    private final Long watermark;
 
-    boolean isComplete;
+    private final boolean isComplete;
 
-    public PartitionWatermarkState(Long watermark, boolean isComplete) {
+    PartitionWatermarkState(Long watermark, boolean isComplete) {
       this.watermark = watermark;
       this.isComplete = isComplete;
     }
@@ -198,16 +197,16 @@ class InMemoryGlobalWatermarkTracker<Partition> implements GlobalWatermarkTracke
       return isComplete;
     }
 
-    static PartitionWatermarkState max(PartitionWatermarkState a, PartitionWatermarkState b) {
-      if (a == null) {
-        return b;
+    static PartitionWatermarkState max(PartitionWatermarkState first, PartitionWatermarkState second) {
+      if (first == null) {
+        return second;
       }
-      if (b == null) {
-        return a;
+      if (second == null) {
+        return first;
       }
 
       return new PartitionWatermarkState(
-          Math.max(a.watermark, b.watermark), a.isComplete || b.isComplete);
+          Math.max(first.watermark, second.watermark), first.isComplete || second.isComplete);
     }
   }
 }
