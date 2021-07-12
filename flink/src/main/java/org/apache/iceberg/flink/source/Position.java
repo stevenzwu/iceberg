@@ -26,8 +26,10 @@ import org.apache.iceberg.relocated.com.google.common.base.MoreObjects;
 
 /**
  * A mutable class that defines the read position
- * <li>file offset in the list of files in a {@link CombinedScanTask}</li>
- * <li>record offset within a file</li>
+ * <ul>
+ *   <li>file offset in the list of files in a {@link CombinedScanTask}</li>
+ *   <li>record offset within a file</li>
+ * </ul>
  */
 public class Position implements Serializable {
 
