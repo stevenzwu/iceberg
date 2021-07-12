@@ -22,31 +22,25 @@ package org.apache.iceberg.flink.source.reader;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
-import org.apache.flink.connector.file.src.util.CheckpointedPosition;
+import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.file.src.util.RecordAndPosition;
-import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.data.conversion.DataStructureConverter;
-import org.apache.flink.table.data.conversion.DataStructureConverters;
-import org.apache.flink.table.types.logical.RowType;
-import org.apache.flink.table.types.utils.TypeConversions;
-import org.apache.flink.types.Row;
 import org.apache.iceberg.BaseCombinedScanTask;
 import org.apache.iceberg.CombinedScanTask;
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.FileScanTask;
+import org.apache.iceberg.Schema;
 import org.apache.iceberg.data.GenericAppenderHelper;
 import org.apache.iceberg.data.RandomGenericData;
 import org.apache.iceberg.data.Record;
-import org.apache.iceberg.flink.FlinkSchemaUtil;
 import org.apache.iceberg.flink.HadoopTableResource;
 import org.apache.iceberg.flink.TestFixtures;
-import org.apache.iceberg.flink.TestHelpers;
 import org.apache.iceberg.flink.source.FlinkSplitGenerator;
+import org.apache.iceberg.flink.source.Position;
 import org.apache.iceberg.flink.source.ScanContext;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
+import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.hamcrest.CoreMatchers;
 import org.junit.Assert;
@@ -59,7 +53,16 @@ import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
 @RunWith(Parameterized.class)
-public abstract class ReaderFactoryTestBase {
+public abstract class ReaderFactoryTestBase<T> {
+
+  @Parameterized.Parameters(name = "fileFormat={0}")
+  public static Object[][] parameters() {
+    return new Object[][]{
+        new Object[]{FileFormat.AVRO},
+        new Object[]{FileFormat.ORC},
+        new Object[]{FileFormat.PARQUET}
+    };
+  }
 
   @ClassRule
   public static final TemporaryFolder TEMPORARY_FOLDER = new TemporaryFolder();
@@ -67,18 +70,14 @@ public abstract class ReaderFactoryTestBase {
   protected static final ScanContext scanContext = ScanContext.builder()
       .project(TestFixtures.SCHEMA)
       .build();
-  protected static final RowType rowType = FlinkSchemaUtil
-      .convert(scanContext.project());
-  private static final DataStructureConverter<Object, Object> rowDataConverter = DataStructureConverters.getConverter(
-      TypeConversions.fromLogicalToDataType(rowType));
-  private static final org.apache.flink.configuration.Configuration flinkConfig =
-      new org.apache.flink.configuration.Configuration();
 
   @Rule
   public final HadoopTableResource tableResource = new HadoopTableResource(TEMPORARY_FOLDER,
       TestFixtures.DATABASE, TestFixtures.TABLE, TestFixtures.SCHEMA);
 
-  protected abstract ReaderFactory<RowData> getReaderFactory();
+  protected abstract ReaderFactory<T> getReaderFactory();
+
+  protected abstract void assertRecords(List<Record> expected, List<T> actual, Schema schema);
 
   private final FileFormat fileFormat;
 
@@ -132,130 +131,147 @@ public abstract class ReaderFactoryTestBase {
     return IcebergSourceSplit.fromCombinedScanTask(rearrangedCombinedTask);
   }
 
+  /**
+   * We have to combine the record extraction and position assertion in a single function,
+   * because iterator is only valid for one pass.
+   */
+  private List<T> extractRecordsAndAssertPosition(
+      RecordsWithSplitIds<RecordAndPosition<T>> batch,
+      long expectedCount, long exptectedFileOffset, long startRecordOffset) {
+    // need to call nextSplit first in order to read the batch
+    batch.nextSplit();
+    final List<T> records = new ArrayList<>();
+    long recordOffset = startRecordOffset;
+    RecordAndPosition<T> recordAndPosition;
+    while ((recordAndPosition = batch.nextRecordFromSplit()) != null) {
+      records.add(recordAndPosition.getRecord());
+      Assert.assertEquals("expected file offset", exptectedFileOffset, recordAndPosition.getOffset());
+      Assert.assertEquals("expected record offset", recordOffset, recordAndPosition.getRecordSkipCount() - 1);
+      recordOffset++;
+    }
+    Assert.assertEquals("expected record count", expectedCount, records.size());
+    return records;
+  }
+
   @Test
   public void testNoCheckpointedPosition() throws IOException {
     final IcebergSourceSplit split = icebergSplit;
-    final ReaderFactory.Reader<RowData> reader = getReaderFactory().create(flinkConfig, split);
+    final CloseableIterator<RecordsWithSplitIds<RecordAndPosition<T>>> reader = getReaderFactory().apply(split);
 
-    final ReaderFactory.RecordIterator<RowData> iter0 = reader.readBatch();
-    final List<Row> rows0 = toRows(iter0, 0L, 0L);
-    TestHelpers.assertRecords(rows0, recordBatchList.get(0), TestFixtures.SCHEMA);
+    final RecordsWithSplitIds<RecordAndPosition<T>> batch0 = reader.next();
+    final List<T> actual0 = extractRecordsAndAssertPosition(batch0, recordBatchList.get(0).size(), 0L, 0L);
+    assertRecords(recordBatchList.get(0), actual0, TestFixtures.SCHEMA);
+    batch0.recycle();
 
-    final ReaderFactory.RecordIterator<RowData> iter1 = reader.readBatch();
-    final List<Row> rows1 = toRows(iter1, 1L, 0L);
-    TestHelpers.assertRecords(rows1, recordBatchList.get(1), TestFixtures.SCHEMA);
+    final RecordsWithSplitIds<RecordAndPosition<T>> batch1 = reader.next();
+    final List<T> actual1 = extractRecordsAndAssertPosition(batch1, recordBatchList.get(1).size(), 1L, 0L);
+    assertRecords(recordBatchList.get(1), actual1, TestFixtures.SCHEMA);
+    batch1.recycle();
 
-    final ReaderFactory.RecordIterator<RowData> iter2 = reader.readBatch();
-    final List<Row> rows2 = toRows(iter2, 2L, 0L);
-    TestHelpers.assertRecords(rows2, recordBatchList.get(2), TestFixtures.SCHEMA);
+    final RecordsWithSplitIds<RecordAndPosition<T>> batch2 = reader.next();
+    final List<T> actual2 = extractRecordsAndAssertPosition(batch2, recordBatchList.get(2).size(), 2L, 0L);
+    assertRecords(recordBatchList.get(2), actual2, TestFixtures.SCHEMA);
+    batch2.recycle();
   }
 
   @Test
   public void testCheckpointedPositionBeforeFirstFile() throws IOException {
     final IcebergSourceSplit split = new IcebergSourceSplit(
         icebergSplit.task(),
-        new CheckpointedPosition(0L, 0L));
-    final ReaderFactory.Reader<RowData> reader = getReaderFactory().create(flinkConfig, split);
+        new Position(0L, 0L));
+    final CloseableIterator<RecordsWithSplitIds<RecordAndPosition<T>>> reader = getReaderFactory().apply(split);
 
-    final ReaderFactory.RecordIterator<RowData> iter0 = reader.readBatch();
-    final List<Row> rows0 = toRows(iter0, 0L, 0L);
-    TestHelpers.assertRecords(rows0, recordBatchList.get(0), TestFixtures.SCHEMA);
+    final RecordsWithSplitIds<RecordAndPosition<T>> batch0 = reader.next();
+    final List<T> actual0 = extractRecordsAndAssertPosition(batch0, recordBatchList.get(0).size(), 0L, 0L);
+    assertRecords(recordBatchList.get(0), actual0, TestFixtures.SCHEMA);
+    batch0.recycle();
 
-    final ReaderFactory.RecordIterator<RowData> iter1 = reader.readBatch();
-    final List<Row> rows1 = toRows(iter1, 1L, 0L);
-    TestHelpers.assertRecords(rows1, recordBatchList.get(1), TestFixtures.SCHEMA);
+    final RecordsWithSplitIds<RecordAndPosition<T>> batch1 = reader.next();
+    final List<T> actual1 = extractRecordsAndAssertPosition(batch1, recordBatchList.get(1).size(), 1L, 0L);
+    assertRecords(recordBatchList.get(1), actual1, TestFixtures.SCHEMA);
+    batch1.recycle();
 
-    final ReaderFactory.RecordIterator<RowData> iter2 = reader.readBatch();
-    final List<Row> rows2 = toRows(iter2, 2L, 0L);
-    TestHelpers.assertRecords(rows2, recordBatchList.get(2), TestFixtures.SCHEMA);
+    final RecordsWithSplitIds<RecordAndPosition<T>> batch2 = reader.next();
+    final List<T> actual2 = extractRecordsAndAssertPosition(batch2, recordBatchList.get(2).size(), 2L, 0L);
+    assertRecords(recordBatchList.get(2), actual2, TestFixtures.SCHEMA);
+    batch2.recycle();
   }
 
   @Test
   public void testCheckpointedPositionMiddleFirstFile() throws IOException {
     final IcebergSourceSplit split = new IcebergSourceSplit(
         icebergSplit.task(),
-        new CheckpointedPosition(0L, 1L));
-    final ReaderFactory.Reader<RowData> reader = getReaderFactory().create(flinkConfig, split);
+        new Position(0L, 1L));
+    final CloseableIterator<RecordsWithSplitIds<RecordAndPosition<T>>> reader = getReaderFactory().apply(split);
 
-    final ReaderFactory.RecordIterator<RowData> iter0 = reader.readBatch();
-    final List<Row> rows0 = toRows(iter0, 0L, 1L);
-    TestHelpers.assertRecords(rows0, recordBatchList.get(0).subList(1, 2), TestFixtures.SCHEMA);
+    final RecordsWithSplitIds<RecordAndPosition<T>> batch0 = reader.next();
+    final List<T> actual0 = extractRecordsAndAssertPosition(batch0, 1L, 0L, 1L);
+    assertRecords(recordBatchList.get(0).subList(1, 2), actual0, TestFixtures.SCHEMA);
+    batch0.recycle();
 
-    final ReaderFactory.RecordIterator<RowData> iter1 = reader.readBatch();
-    final List<Row> rows1 = toRows(iter1, 1L, 0L);
-    TestHelpers.assertRecords(rows1, recordBatchList.get(1), TestFixtures.SCHEMA);
+    final RecordsWithSplitIds<RecordAndPosition<T>> batch1 = reader.next();
+    final List<T> actual1 = extractRecordsAndAssertPosition(batch1, recordBatchList.get(1).size(), 1L, 0L);
+    assertRecords(recordBatchList.get(1), actual1, TestFixtures.SCHEMA);
+    batch1.recycle();
 
-    final ReaderFactory.RecordIterator<RowData> iter2 = reader.readBatch();
-    final List<Row> row2 = toRows(iter2, 2L, 0L);
-    TestHelpers.assertRecords(row2, recordBatchList.get(2), TestFixtures.SCHEMA);
+    final RecordsWithSplitIds<RecordAndPosition<T>> batch2 = reader.next();
+    final List<T> actual2 = extractRecordsAndAssertPosition(batch2, recordBatchList.get(2).size(), 2L, 0L);
+    assertRecords(recordBatchList.get(2), actual2, TestFixtures.SCHEMA);
+    batch2.recycle();
   }
 
   @Test
   public void testCheckpointedPositionAfterFirstFile() throws IOException {
     final IcebergSourceSplit split = new IcebergSourceSplit(
         icebergSplit.task(),
-        new CheckpointedPosition(0L, 2L));
-    final ReaderFactory.Reader<RowData> reader = getReaderFactory().create(flinkConfig, split);
+        new Position(0L, 2L));
+    final CloseableIterator<RecordsWithSplitIds<RecordAndPosition<T>>> reader = getReaderFactory().apply(split);
 
-    final ReaderFactory.RecordIterator<RowData> iter1 = reader.readBatch();
-    final List<Row> rows1 = toRows(iter1, 1L, 0L);
-    TestHelpers.assertRecords(rows1, recordBatchList.get(1), TestFixtures.SCHEMA);
+    final RecordsWithSplitIds<RecordAndPosition<T>> batch0 = reader.next();
+    final List<T> actual1 = extractRecordsAndAssertPosition(batch0, recordBatchList.get(1).size(), 1L, 0L);
+    assertRecords(recordBatchList.get(1), actual1, TestFixtures.SCHEMA);
+    batch0.recycle();
 
-    final ReaderFactory.RecordIterator<RowData> iter2 = reader.readBatch();
-    final List<Row> row2 = toRows(iter2, 2L, 0L);
-    TestHelpers.assertRecords(row2, recordBatchList.get(2), TestFixtures.SCHEMA);
+    final RecordsWithSplitIds<RecordAndPosition<T>> batch2 = reader.next();
+    final List<T> actual2 = extractRecordsAndAssertPosition(batch2, recordBatchList.get(2).size(), 2L, 0L);
+    assertRecords(recordBatchList.get(2), actual2, TestFixtures.SCHEMA);
+    batch2.recycle();
   }
 
   @Test
   public void testCheckpointedPositionBeforeSecondFile() throws IOException {
     final IcebergSourceSplit split = new IcebergSourceSplit(
         icebergSplit.task(),
-        new CheckpointedPosition(1L, 0L));
-    final ReaderFactory.Reader<RowData> reader = getReaderFactory().create(flinkConfig, split);
+        new Position(1L, 0L));
+    final CloseableIterator<RecordsWithSplitIds<RecordAndPosition<T>>> reader = getReaderFactory().apply(split);
 
-    final ReaderFactory.RecordIterator<RowData> iter1 = reader.readBatch();
-    final List<Row> rows1 = toRows(iter1, 1L, 0L);
-    TestHelpers.assertRecords(rows1, recordBatchList.get(1), TestFixtures.SCHEMA);
+    final RecordsWithSplitIds<RecordAndPosition<T>> batch1 = reader.next();
+    final List<T> actual1 = extractRecordsAndAssertPosition(batch1, recordBatchList.get(1).size(), 1L, 0L);
+    assertRecords(recordBatchList.get(1), actual1, TestFixtures.SCHEMA);
+    batch1.recycle();
 
-    final ReaderFactory.RecordIterator<RowData> iter2 = reader.readBatch();
-    final List<Row> row2 = toRows(iter2, 2L, 0L);
-    TestHelpers.assertRecords(row2, recordBatchList.get(2), TestFixtures.SCHEMA);
+    final RecordsWithSplitIds<RecordAndPosition<T>> batch2 = reader.next();
+    final List<T> actual2 = extractRecordsAndAssertPosition(batch2, recordBatchList.get(2).size(), 2L, 0L);
+    assertRecords(recordBatchList.get(2), actual2, TestFixtures.SCHEMA);
+    batch2.recycle();
   }
 
   @Test
   public void testCheckpointedPositionMidSecondFile() throws IOException {
     final IcebergSourceSplit split = new IcebergSourceSplit(
         icebergSplit.task(),
-        new CheckpointedPosition(1L, 1L));
-    final ReaderFactory.Reader<RowData> reader = getReaderFactory().create(flinkConfig, split);
+        new Position(1L, 1L));
+    final CloseableIterator<RecordsWithSplitIds<RecordAndPosition<T>>> reader = getReaderFactory().apply(split);
 
-    final ReaderFactory.RecordIterator<RowData> iter1 = reader.readBatch();
-    final List<Row> rows1 = toRows(iter1, 1L, 1L);
-    TestHelpers.assertRecords(rows1, recordBatchList.get(1).subList(1, 2), TestFixtures.SCHEMA);
+    final RecordsWithSplitIds<RecordAndPosition<T>> batch1 = reader.next();
+    final List<T> actual1 = extractRecordsAndAssertPosition(batch1, 1L, 1L, 1L);
+    assertRecords(recordBatchList.get(1).subList(1, 2), actual1, TestFixtures.SCHEMA);
+    batch1.recycle();
 
-    final ReaderFactory.RecordIterator<RowData> iter2 = reader.readBatch();
-    final List<Row> row2 = toRows(iter2, 2L, 0L);
-    TestHelpers.assertRecords(row2, recordBatchList.get(2), TestFixtures.SCHEMA);
+    final RecordsWithSplitIds<RecordAndPosition<T>> batch2 = reader.next();
+    final List<T> actual2 = extractRecordsAndAssertPosition(batch2, recordBatchList.get(2).size(), 2L, 0L);
+    assertRecords(recordBatchList.get(2), actual2, TestFixtures.SCHEMA);
+    batch2.recycle();
   }
 
-  private List<Row> toRows(final ReaderFactory.RecordIterator<RowData> iter,
-                           final long exptectedFileOffset,
-                           final long startRecordOffset) {
-    if (iter == null) {
-      return Collections.emptyList();
-    }
-    final List<Row> result = new ArrayList<>();
-    RecordAndPosition<RowData> recordAndPosition;
-    long recordOffset = startRecordOffset;
-    while ((recordAndPosition = iter.next()) != null) {
-      Assert.assertEquals(exptectedFileOffset, recordAndPosition.getOffset());
-      Assert.assertEquals(recordOffset, recordAndPosition.getRecordSkipCount() - 1);
-      recordOffset++;
-      final Row row = (Row) rowDataConverter.toExternal(recordAndPosition.getRecord());
-      result.add(row);
-    }
-    // it is important to release the batch
-    iter.releaseBatch();
-    return result;
-  }
 }

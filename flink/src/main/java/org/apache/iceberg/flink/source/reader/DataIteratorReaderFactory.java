@@ -20,38 +20,31 @@
 package org.apache.iceberg.flink.source.reader;
 
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.types.logical.RowType;
-import org.apache.iceberg.Table;
+import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
+import org.apache.flink.connector.file.src.util.RecordAndPosition;
 import org.apache.iceberg.flink.source.DataIterator;
-import org.apache.iceberg.flink.source.RowDataIterator;
-import org.apache.iceberg.flink.source.ScanContext;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
+import org.apache.iceberg.io.CloseableIterator;
 
-public class RowDataIteratorReaderFactory extends DataIteratorReaderFactory<RowData> {
+public abstract class DataIteratorReaderFactory<T> implements ReaderFactory<T> {
 
-  private final Table table;
-  private final ScanContext scanContext;
+  private final Configuration config;
+  private final DataIteratorBatcher<T> batcher;
 
-  public RowDataIteratorReaderFactory(
-      Configuration config,
-      Table table,
-      ScanContext scanContext,
-      RowType rowType) {
-    super(config, new ArrayPoolDataIteratorBatcher<>(config, new RowDataRecordFactory(rowType)));
-    this.table = table;
-    this.scanContext = scanContext;
+  public DataIteratorReaderFactory(Configuration config, DataIteratorBatcher<T> batcher) {
+    this.config = config;
+    this.batcher = batcher;
   }
+
+  protected abstract DataIterator<T> createDataIterator(IcebergSourceSplit split);
 
   @Override
-  protected DataIterator<RowData> createDataIterator(IcebergSourceSplit split) {
-    return new RowDataIterator(
-        split.task(),
-        table.io(),
-        table.encryption(),
-        table.schema(),
-        scanContext.project(),
-        scanContext.nameMapping(),
-        scanContext.caseSensitive());
+  public CloseableIterator<RecordsWithSplitIds<RecordAndPosition<T>>> apply(IcebergSourceSplit split) {
+    DataIterator<T> inputIterator = createDataIterator(split);
+    if (split.position() != null) {
+      inputIterator.seek(split.position());
+    }
+    return batcher.apply(split.splitId(), inputIterator);
   }
+
 }

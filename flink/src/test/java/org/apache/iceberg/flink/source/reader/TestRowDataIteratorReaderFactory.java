@@ -19,22 +19,30 @@
 
 package org.apache.iceberg.flink.source.reader;
 
+import java.util.List;
+import java.util.stream.Collectors;
+import org.apache.flink.configuration.Configuration;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.data.conversion.DataStructureConverter;
+import org.apache.flink.table.data.conversion.DataStructureConverters;
+import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.types.utils.TypeConversions;
+import org.apache.flink.types.Row;
 import org.apache.iceberg.FileFormat;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
+import org.apache.iceberg.Schema;
+import org.apache.iceberg.data.Record;
+import org.apache.iceberg.flink.FlinkSchemaUtil;
+import org.apache.iceberg.flink.TestFixtures;
+import org.apache.iceberg.flink.TestHelpers;
 
-@RunWith(Parameterized.class)
-public class TestRowDataIteratorReaderFactory extends ReaderFactoryTestBase {
+public class TestRowDataIteratorReaderFactory extends ReaderFactoryTestBase<RowData> {
 
-  @Parameterized.Parameters(name = "fileFormat={0}")
-  public static Object[][] parameters() {
-    return new Object[][]{
-        new Object[]{FileFormat.AVRO},
-        new Object[]{FileFormat.ORC},
-        new Object[]{FileFormat.PARQUET}
-    };
-  }
+  protected static final RowType rowType = FlinkSchemaUtil
+      .convert(scanContext.project());
+  private static final DataStructureConverter<Object, Object> rowDataConverter = DataStructureConverters.getConverter(
+      TypeConversions.fromLogicalToDataType(rowType));
+  private static final org.apache.flink.configuration.Configuration flinkConfig =
+      new org.apache.flink.configuration.Configuration();
 
   public TestRowDataIteratorReaderFactory(FileFormat fileFormat) {
     super(fileFormat);
@@ -42,6 +50,18 @@ public class TestRowDataIteratorReaderFactory extends ReaderFactoryTestBase {
 
   @Override
   protected ReaderFactory<RowData> getReaderFactory() {
-    return new RowDataIteratorReaderFactory(tableResource.table(), scanContext, rowType);
+    return new RowDataIteratorReaderFactory(new Configuration(), tableResource.table(), scanContext, rowType);
+  }
+
+  @Override
+  protected void assertRecords(List<Record> expected, List<RowData> actual, Schema schema) {
+    final List<Row> rows = toRows(actual);
+    TestHelpers.assertRecords(rows, expected, TestFixtures.SCHEMA);
+  }
+
+  private List<Row> toRows(List<RowData> actual) {
+    return actual.stream()
+        .map(rowData -> (Row) rowDataConverter.toExternal(rowData))
+        .collect(Collectors.toList());
   }
 }

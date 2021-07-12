@@ -79,7 +79,7 @@ public class TestRecyclableArrayIterator {
   public void testRecycler() {
     final AtomicBoolean recycled = new AtomicBoolean();
     final RecyclableArrayIterator<String> iter = new RecyclableArrayIterator<>(ignored -> recycled.set(true));
-    iter.releaseBatch();
+    iter.close();
     Assert.assertTrue(recycled.get());
   }
 }

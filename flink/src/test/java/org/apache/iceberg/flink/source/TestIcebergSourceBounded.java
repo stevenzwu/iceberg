@@ -117,7 +117,7 @@ public class TestIcebergSourceBounded extends TestFlinkScan {
         IcebergSource.<RowData>builder()
             .tableLoader(tableLoader())
             .assignerFactory(new SimpleSplitAssignerFactory())
-            .readerFactory(new RowDataIteratorReaderFactory(table, scanContext, rowType))
+            .readerFactory(new RowDataIteratorReaderFactory(config, table, scanContext, rowType))
             .scanContext(scanContext)
             .build(),
         WatermarkStrategy.noWatermarks(),

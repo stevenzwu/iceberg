@@ -19,26 +19,31 @@
 
 package org.apache.iceberg.flink.source.reader;
 
+import java.io.IOException;
 import java.util.Collections;
 import java.util.Set;
 import javax.annotation.Nullable;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.file.src.util.RecordAndPosition;
+import org.apache.iceberg.io.CloseableIterator;
 
+/**
+ * A batch of recrods for one split
+ */
 public class FileRecords<T> implements RecordsWithSplitIds<RecordAndPosition<T>> {
 
   @Nullable
-  private final ReaderFactory.RecordIterator recordsForSplit;
+  private final CloseableIterator<RecordAndPosition<T>> recordsForSplit;
   private final Set<String> finishedSplits;
 
   @Nullable
   private String splitId;
   @Nullable
-  private ReaderFactory.RecordIterator recordsForSplitCurrent;
+  private CloseableIterator<RecordAndPosition<T>> recordsForSplitCurrent;
 
   private FileRecords(
       @Nullable String splitId,
-      @Nullable ReaderFactory.RecordIterator recordsForSplit,
+      @Nullable CloseableIterator<RecordAndPosition<T>> recordsForSplit,
       Set<String> finishedSplits) {
 
     this.splitId = splitId;
@@ -72,7 +77,11 @@ public class FileRecords<T> implements RecordsWithSplitIds<RecordAndPosition<T>>
   @Override
   public void recycle() {
     if (recordsForSplit != null) {
-      recordsForSplit.releaseBatch();
+      try {
+        recordsForSplit.close();
+      } catch (IOException e) {
+        throw new RuntimeException("Failed to close the record batch");
+      }
     }
   }
 
@@ -82,7 +91,7 @@ public class FileRecords<T> implements RecordsWithSplitIds<RecordAndPosition<T>>
   }
 
   public static <T> FileRecords<T> forRecords(
-      final String splitId, final ReaderFactory.RecordIterator<T> recordsForSplit) {
+      final String splitId, final CloseableIterator<RecordAndPosition<T>> recordsForSplit) {
     return new FileRecords<>(splitId, recordsForSplit, Collections.emptySet());
   }
 

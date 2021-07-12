@@ -27,17 +27,16 @@ import org.apache.flink.connector.base.source.reader.SingleThreadMultiplexSource
 import org.apache.flink.connector.file.src.util.RecordAndPosition;
 import org.apache.iceberg.flink.source.IcebergSourceEvents;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
-import org.apache.iceberg.flink.source.split.MutableIcebergSourceSplit;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 
 public class IcebergSourceReader<T> extends
-    SingleThreadMultiplexSourceReaderBase<RecordAndPosition<T>, T, IcebergSourceSplit, MutableIcebergSourceSplit> {
+    SingleThreadMultiplexSourceReaderBase<RecordAndPosition<T>, T, IcebergSourceSplit, IcebergSourceSplit> {
 
   public IcebergSourceReader(
       SourceReaderContext context,
       ReaderFactory<T> readerFactory) {
     super(
-        () -> new IcebergSourceSplitReader<>(context.getConfiguration(), readerFactory),
+        () -> new IcebergSourceSplitReader<>(readerFactory),
         new IcebergSourceRecordEmitter(),
         context.getConfiguration(),
         context);
@@ -49,22 +48,22 @@ public class IcebergSourceReader<T> extends
   }
 
   @Override
-  protected void onSplitFinished(Map<String, MutableIcebergSourceSplit> finishedSplitIds) {
+  protected void onSplitFinished(Map<String, IcebergSourceSplit> finishedSplitIds) {
     if (!finishedSplitIds.isEmpty()) {
       requestSplit(Lists.newArrayList(finishedSplitIds.keySet()));
     }
   }
 
   @Override
-  protected MutableIcebergSourceSplit initializedState(IcebergSourceSplit split) {
-    return MutableIcebergSourceSplit.fromSplit(split);
+  protected IcebergSourceSplit initializedState(IcebergSourceSplit split) {
+    return split;
   }
 
   @Override
   protected IcebergSourceSplit toSplitType(
       String splitId,
-      MutableIcebergSourceSplit splitState) {
-    return IcebergSourceSplit.fromSplitState(splitState);
+      IcebergSourceSplit splitState) {
+    return splitState;
   }
 
   private void requestSplit(Collection<String> finishedSplitIds) {

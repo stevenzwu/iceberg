@@ -20,35 +20,31 @@
 package org.apache.iceberg.flink.source.reader;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.ArrayDeque;
 import java.util.Queue;
 import javax.annotation.Nullable;
-import org.apache.flink.configuration.Configuration;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitReader;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitsChange;
-import org.apache.flink.connector.file.src.util.CheckpointedPosition;
 import org.apache.flink.connector.file.src.util.RecordAndPosition;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
+import org.apache.iceberg.io.CloseableIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class IcebergSourceSplitReader<T> implements SplitReader<RecordAndPosition<T>, IcebergSourceSplit> {
   private static final Logger LOG = LoggerFactory.getLogger(IcebergSourceSplitReader.class);
 
-  private final Configuration config;
   private final ReaderFactory<T> readerFactory;
   private final Queue<IcebergSourceSplit> splits;
 
   @Nullable
-  private ReaderFactory.Reader<T> currentReader;
+  private CloseableIterator<RecordsWithSplitIds<RecordAndPosition<T>>> currentReader;
   @Nullable
   private String currentSplitId;
 
-  public IcebergSourceSplitReader(
-      Configuration config,
-      ReaderFactory<T> readerFactory) {
-    this.config = config;
+  public IcebergSourceSplitReader(ReaderFactory<T> readerFactory) {
     this.readerFactory = readerFactory;
     this.splits = new ArrayDeque<>();
   }
@@ -56,8 +52,17 @@ public class IcebergSourceSplitReader<T> implements SplitReader<RecordAndPositio
   @Override
   public RecordsWithSplitIds<RecordAndPosition<T>> fetch() throws IOException {
     checkSplitOrStartNext();
-    final ReaderFactory.RecordIterator<T> nextBatch = currentReader.readBatch();
-    return nextBatch == null ? finishSplit() : FileRecords.forRecords(currentSplitId, nextBatch);
+    if (currentReader.hasNext()) {
+      // Because Iterator#next() doesn't support checked exception,
+      // we need to wrap and unwrap the checked IOException with UncheckedIOException
+      try {
+        return currentReader.next();
+      } catch (UncheckedIOException e) {
+        throw e.getCause();
+      }
+    } else {
+      return finishSplit();
+    }
   }
 
   @Override
@@ -87,8 +92,7 @@ public class IcebergSourceSplitReader<T> implements SplitReader<RecordAndPositio
       throw new IOException("No split remaining");
     }
     currentSplitId = nextSplit.splitId();
-    final CheckpointedPosition position = nextSplit.checkpointedPosition();
-    currentReader = readerFactory.create(config, nextSplit);
+    currentReader = readerFactory.apply(nextSplit);
   }
 
   private FileRecords<T> finishSplit() throws IOException {

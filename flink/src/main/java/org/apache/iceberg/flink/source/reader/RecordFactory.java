@@ -19,22 +19,17 @@
 
 package org.apache.iceberg.flink.source.reader;
 
-import org.apache.flink.annotation.Internal;
-import org.apache.flink.api.connector.source.SourceOutput;
-import org.apache.flink.connector.base.source.reader.RecordEmitter;
-import org.apache.flink.connector.file.src.util.RecordAndPosition;
-import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
+import java.io.Serializable;
 
-@Internal
-final class IcebergSourceRecordEmitter<T> implements RecordEmitter<RecordAndPosition<T>, T, IcebergSourceSplit> {
+public interface RecordFactory<T> extends Serializable {
 
-  @Override
-  public void emitRecord(
-      RecordAndPosition<T> element,
-      SourceOutput<T> output,
-      IcebergSourceSplit split) {
+  /**
+   * Create a batch of records
+   */
+  T[] createBatch(int batchSize);
 
-    output.collect(element.getRecord());
-    split.updatePosition(element.getOffset(), element.getRecordSkipCount());
-  }
+  /**
+   * Clone record
+   */
+  void clone(T from, T to);
 }

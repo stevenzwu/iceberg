@@ -19,22 +19,15 @@
 
 package org.apache.iceberg.flink.source.reader;
 
-import org.apache.flink.annotation.Internal;
-import org.apache.flink.api.connector.source.SourceOutput;
-import org.apache.flink.connector.base.source.reader.RecordEmitter;
+import java.io.Serializable;
+import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.file.src.util.RecordAndPosition;
-import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
+import org.apache.iceberg.flink.source.DataIterator;
+import org.apache.iceberg.io.CloseableIterator;
 
-@Internal
-final class IcebergSourceRecordEmitter<T> implements RecordEmitter<RecordAndPosition<T>, T, IcebergSourceSplit> {
+@FunctionalInterface
+public interface DataIteratorBatcher<T> extends Serializable {
 
-  @Override
-  public void emitRecord(
-      RecordAndPosition<T> element,
-      SourceOutput<T> output,
-      IcebergSourceSplit split) {
+  CloseableIterator<RecordsWithSplitIds<RecordAndPosition<T>>> apply(String splitId, DataIterator<T> inputIterator);
 
-    output.collect(element.getRecord());
-    split.updatePosition(element.getOffset(), element.getRecordSkipCount());
-  }
 }

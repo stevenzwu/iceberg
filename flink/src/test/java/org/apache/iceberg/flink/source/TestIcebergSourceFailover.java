@@ -118,7 +118,7 @@ public class TestIcebergSourceFailover {
         IcebergSource.<RowData>builder()
             .tableLoader(tableResource.tableLoader())
             .assignerFactory(new SimpleSplitAssignerFactory())
-            .readerFactory(new RowDataIteratorReaderFactory(tableResource.table(), scanContext, rowType))
+            .readerFactory(new RowDataIteratorReaderFactory(config, tableResource.table(), scanContext, rowType))
             .scanContext(scanContext)
             .build(),
         WatermarkStrategy.noWatermarks(),
@@ -177,7 +177,7 @@ public class TestIcebergSourceFailover {
         IcebergSource.<RowData>builder()
             .tableLoader(tableResource.tableLoader())
             .assignerFactory(new SimpleSplitAssignerFactory())
-            .readerFactory(new RowDataIteratorReaderFactory(tableResource.table(), scanContext, rowType))
+            .readerFactory(new RowDataIteratorReaderFactory(config, tableResource.table(), scanContext, rowType))
             .scanContext(scanContext)
             .enumeratorConfig(IcebergEnumeratorConfig.builder()
                 .splitDiscoveryInterval(Duration.ofMillis(10))

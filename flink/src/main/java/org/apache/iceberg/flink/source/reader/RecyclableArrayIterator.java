@@ -25,12 +25,13 @@ import org.apache.flink.connector.file.src.util.CheckpointedPosition;
 import org.apache.flink.connector.file.src.util.MutableRecordAndPosition;
 import org.apache.flink.connector.file.src.util.Pool;
 import org.apache.flink.connector.file.src.util.RecordAndPosition;
+import org.apache.iceberg.io.CloseableIterator;
 
 /**
  * Similar to the {@link ArrayResultIterator}.
  * Main difference is the records array can be recycled back to a pool.
  */
-public final class RecyclableArrayIterator<E> implements ReaderFactory.RecordIterator {
+public final class RecyclableArrayIterator<E> implements CloseableIterator<RecordAndPosition<E>> {
 
   private final Pool.Recycler<E[]> recycler;
   private final E[] records;
@@ -44,21 +45,26 @@ public final class RecyclableArrayIterator<E> implements ReaderFactory.RecordIte
   }
 
   /**
-   * Each record's {@link RecordAndPosition} will have the same offset (for {@link RecordAndPosition#getOffset()}.
-   * The first returned record will have a records-to-skip count of {@code skipCountOfFirst + 1}, following
+   * Each record's {@link RecordAndPosition} will have the same fileOffset (for {@link RecordAndPosition#getOffset()}.
+   * The first returned record will have a records-to-skip count of {@code recordOffset + 1}, following
    * the contract that each record needs to point to the position AFTER itself
    * (because a checkpoint taken after the record was emitted needs to resume from after that record).
    */
   public RecyclableArrayIterator(
       Pool.Recycler<E[]> recycler, final E[] newRecords,
-      final int newNum, final long offset, final long skipCountOfFirst) {
+      final int newNum, final long fileOffset, final long recordOffset) {
     this.recycler = recycler;
     this.records = newRecords;
     this.num = newNum;
     this.recordAndPosition = new MutableRecordAndPosition<>();
-    this.recordAndPosition.set(null, offset, skipCountOfFirst);
+    this.recordAndPosition.set(null, fileOffset, recordOffset);
 
     this.pos = 0;
+  }
+
+  @Override
+  public boolean hasNext() {
+    return pos < num;
   }
 
   @Override
@@ -73,7 +79,7 @@ public final class RecyclableArrayIterator<E> implements ReaderFactory.RecordIte
   }
 
   @Override
-  public void releaseBatch() {
+  public void close() {
     recycler.recycle(records);
   }
 }

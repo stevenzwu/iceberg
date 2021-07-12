@@ -22,7 +22,7 @@ package org.apache.iceberg.flink.source.split;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
-import org.apache.flink.connector.file.src.util.CheckpointedPosition;
+import org.apache.iceberg.flink.source.Position;
 import org.junit.Assert;
 import org.junit.ClassRule;
 import org.junit.Test;
@@ -77,7 +77,7 @@ public class TestIcebergSourceSplitSerializer {
         .map(split -> {
           final IcebergSourceSplit result;
           if (index.get() % 2 == 0) {
-            result = new IcebergSourceSplit(split.task(), new CheckpointedPosition(index.get(), index.get()));
+            result = new IcebergSourceSplit(split.task(), new Position(index.get(), index.get()));
           } else {
             result = split;
           }

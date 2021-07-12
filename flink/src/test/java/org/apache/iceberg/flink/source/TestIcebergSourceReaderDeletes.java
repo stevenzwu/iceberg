@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -81,7 +82,7 @@ public class TestIcebergSourceReaderDeletes extends TestFlinkReaderDeletesBase {
     TableLoader hiveTableLoader = TableLoader.fromCatalog(hiveCatalogLoader, TableIdentifier.of("default", tableName));
     hiveTableLoader.open();
     try (TableLoader tableLoader = hiveTableLoader) {
-
+      final Configuration config = new Configuration();
       final ScanContext scanContext = ScanContext.builder()
           .project(projected)
           .build();
@@ -92,7 +93,7 @@ public class TestIcebergSourceReaderDeletes extends TestFlinkReaderDeletesBase {
           IcebergSource.<RowData>builder()
               .tableLoader(tableLoader)
               .assignerFactory(new SimpleSplitAssignerFactory())
-              .readerFactory(new RowDataIteratorReaderFactory(table, scanContext, rowType))
+              .readerFactory(new RowDataIteratorReaderFactory(config, table, scanContext, rowType))
               .scanContext(scanContext)
               .build(),
           WatermarkStrategy.noWatermarks(),

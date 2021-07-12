@@ -30,6 +30,7 @@ import org.apache.flink.api.common.JobStatus;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.client.program.ClusterClient;
+import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.client.JobStatusMessage;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -302,6 +303,7 @@ public class TestIcebergSourceContinuous {
 
   private DataStream<Row> createStream(IcebergEnumeratorConfig enumeratorConfig) throws Exception {
 
+    final Configuration config = new Configuration();
     final ScanContext scanContext = ScanContext.builder()
         .project(tableResource.table().schema())
         .build();
@@ -314,7 +316,7 @@ public class TestIcebergSourceContinuous {
         IcebergSource.<RowData>builder()
             .tableLoader(tableResource.tableLoader())
             .assignerFactory(new SimpleSplitAssignerFactory())
-            .readerFactory(new RowDataIteratorReaderFactory(tableResource.table(), scanContext, rowType))
+            .readerFactory(new RowDataIteratorReaderFactory(config, tableResource.table(), scanContext, rowType))
             .scanContext(scanContext)
             .enumeratorConfig(enumeratorConfig)
             .build(),

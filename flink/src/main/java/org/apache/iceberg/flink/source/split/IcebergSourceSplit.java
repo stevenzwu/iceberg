@@ -24,9 +24,9 @@ import java.util.Collection;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 import org.apache.flink.api.connector.source.SourceSplit;
-import org.apache.flink.connector.file.src.util.CheckpointedPosition;
 import org.apache.iceberg.CombinedScanTask;
 import org.apache.iceberg.FileScanTask;
+import org.apache.iceberg.flink.source.Position;
 import org.apache.iceberg.relocated.com.google.common.base.MoreObjects;
 import org.apache.iceberg.relocated.com.google.common.base.Objects;
 import org.apache.iceberg.relocated.com.google.common.collect.Iterables;
@@ -34,8 +34,12 @@ import org.apache.iceberg.relocated.com.google.common.collect.Iterables;
 public class IcebergSourceSplit implements SourceSplit, Serializable {
 
   private final CombinedScanTask task;
+
+  /**
+   * Position field is mutable
+   */
   @Nullable
-  private final CheckpointedPosition checkpointedPosition;
+  private final Position position;
 
   /**
    * The splits are frequently serialized into checkpoints.
@@ -44,29 +48,26 @@ public class IcebergSourceSplit implements SourceSplit, Serializable {
   @Nullable
   private transient byte[] serializedFormCache;
 
-  public IcebergSourceSplit(CombinedScanTask task, CheckpointedPosition checkpointedPosition) {
-    // Supply dummy values so that IcebergSourceSplit extend from FileSourceSplit,
-    // as required by using BulkFormat interface in IcebergSource.
-    // We are hoping to clean this up after FLINK-20174 is resolved.
+  public IcebergSourceSplit(CombinedScanTask task, Position position) {
     this.task = task;
-    this.checkpointedPosition = checkpointedPosition;
+    this.position = position;
   }
 
   public static IcebergSourceSplit fromCombinedScanTask(CombinedScanTask combinedScanTask) {
-    return new IcebergSourceSplit(combinedScanTask, null);
+    return fromCombinedScanTask(combinedScanTask, 0L, 0L);
   }
 
-  public static IcebergSourceSplit fromSplitState(MutableIcebergSourceSplit state) {
-    return new IcebergSourceSplit(state.task(), new CheckpointedPosition(
-        state.offset(), state.recordsToSkipAfterOffset()));
+  public static IcebergSourceSplit fromCombinedScanTask(
+      CombinedScanTask combinedScanTask, long fileOffset, long recordOffset) {
+    return new IcebergSourceSplit(combinedScanTask, new Position(fileOffset, recordOffset));
   }
 
   public CombinedScanTask task() {
     return task;
   }
 
-  public CheckpointedPosition checkpointedPosition() {
-    return checkpointedPosition;
+  public Position position() {
+    return position;
   }
 
   public byte[] serializedFormCache() {
@@ -84,6 +85,10 @@ public class IcebergSourceSplit implements SourceSplit, Serializable {
         .toString();
   }
 
+  public void updatePosition(long newFileOffset, long newRecordOffset) {
+    position.update(newFileOffset, newRecordOffset);
+  }
+
   @Override
   public boolean equals(Object o) {
     if (this == o) {
@@ -94,7 +99,7 @@ public class IcebergSourceSplit implements SourceSplit, Serializable {
     }
     IcebergSourceSplit split = (IcebergSourceSplit) o;
     return Objects.equal(splitId(), split.splitId()) &&
-        Objects.equal(checkpointedPosition, split.checkpointedPosition());
+        Objects.equal(position, split.position());
   }
 
   @Override
@@ -106,7 +111,7 @@ public class IcebergSourceSplit implements SourceSplit, Serializable {
   public String toString() {
     return MoreObjects.toStringHelper(this)
         .add("files", toString(task.files()))
-        .add("checkpointedPosition", checkpointedPosition)
+        .add("position", position)
         .toString();
   }
 
