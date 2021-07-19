@@ -20,8 +20,10 @@
 package org.apache.iceberg.flink.source.assigner;
 
 import javax.annotation.Nullable;
+import org.apache.flink.annotation.Internal;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
 
+@Internal
 public class GetSplitResult {
 
   public enum Status {

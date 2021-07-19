@@ -22,6 +22,7 @@ package org.apache.iceberg.flink.source.enumerator;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.iceberg.HistoryEntry;
 import org.apache.iceberg.Snapshot;
@@ -39,6 +40,7 @@ import org.slf4j.LoggerFactory;
  * <p>
  * This also make it a littler easier for unit testing, as the main complexity is in this planner class.
  */
+@Internal
 public class ContinuousSplitPlannerImpl implements ContinuousSplitPlanner {
 
   private static final Logger LOG = LoggerFactory.getLogger(ContinuousSplitPlannerImpl.class);

@@ -19,6 +19,9 @@
 
 package org.apache.iceberg.flink.source.enumerator;
 
+import org.apache.flink.annotation.Internal;
+
+@Internal
 public interface ContinuousSplitPlanner {
 
   ContinuousEnumerationResult planSplits(IcebergEnumeratorPosition lastPosition);

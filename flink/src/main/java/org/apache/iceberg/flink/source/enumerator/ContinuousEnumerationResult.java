@@ -22,12 +22,12 @@ package org.apache.iceberg.flink.source.enumerator;
 import java.util.Collection;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
 
-public class ContinuousEnumerationResult {
+class ContinuousEnumerationResult {
 
   private final Collection<IcebergSourceSplit> splits;
   private final IcebergEnumeratorPosition position;
 
-  public ContinuousEnumerationResult(
+  ContinuousEnumerationResult(
       Collection<IcebergSourceSplit> splits,
       IcebergEnumeratorPosition position) {
     this.splits = splits;
