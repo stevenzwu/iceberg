@@ -55,7 +55,7 @@ import org.apache.iceberg.flink.TestHelpers;
 import org.apache.iceberg.flink.data.RowDataToRowMapper;
 import org.apache.iceberg.flink.source.assigner.SimpleSplitAssignerFactory;
 import org.apache.iceberg.flink.source.enumerator.IcebergEnumeratorConfig;
-import org.apache.iceberg.flink.source.reader.RowDataIteratorReaderFactory;
+import org.apache.iceberg.flink.source.reader.RowDataIteratorReaderFunction;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.junit.ClassRule;
 import org.junit.Rule;
@@ -118,7 +118,7 @@ public class TestIcebergSourceFailover {
         IcebergSource.<RowData>builder()
             .tableLoader(tableResource.tableLoader())
             .assignerFactory(new SimpleSplitAssignerFactory())
-            .readerFactory(new RowDataIteratorReaderFactory(config, tableResource.table(), scanContext, rowType))
+            .readerFunction(new RowDataIteratorReaderFunction(config, tableResource.table(), scanContext, rowType))
             .scanContext(scanContext)
             .build(),
         WatermarkStrategy.noWatermarks(),
@@ -177,7 +177,7 @@ public class TestIcebergSourceFailover {
         IcebergSource.<RowData>builder()
             .tableLoader(tableResource.tableLoader())
             .assignerFactory(new SimpleSplitAssignerFactory())
-            .readerFactory(new RowDataIteratorReaderFactory(config, tableResource.table(), scanContext, rowType))
+            .readerFunction(new RowDataIteratorReaderFunction(config, tableResource.table(), scanContext, rowType))
             .scanContext(scanContext)
             .enumeratorConfig(IcebergEnumeratorConfig.builder()
                 .splitDiscoveryInterval(Duration.ofMillis(10))

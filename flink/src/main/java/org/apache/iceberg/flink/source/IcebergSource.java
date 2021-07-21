@@ -42,7 +42,7 @@ import org.apache.iceberg.flink.source.enumerator.IcebergEnumeratorState;
 import org.apache.iceberg.flink.source.enumerator.IcebergEnumeratorStateSerializer;
 import org.apache.iceberg.flink.source.enumerator.StaticIcebergEnumerator;
 import org.apache.iceberg.flink.source.reader.IcebergSourceReader;
-import org.apache.iceberg.flink.source.reader.ReaderFactory;
+import org.apache.iceberg.flink.source.reader.ReaderFunction;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplitSerializer;
 
@@ -51,21 +51,21 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
 
   private final TableLoader tableLoader;
   private final ScanContext scanContext;
-  private final ReaderFactory<T> readerFactory;
+  private final ReaderFunction<T> readerFunction;
   private final SplitAssignerFactory assignerFactory;
   private final IcebergEnumeratorConfig enumeratorConfig;
 
   IcebergSource(
       TableLoader tableLoader,
       ScanContext scanContext,
-      ReaderFactory<T> readerFactory,
+      ReaderFunction<T> readerFunction,
       SplitAssignerFactory assignerFactory,
       IcebergEnumeratorConfig enumeratorConfig) {
 
     this.tableLoader = tableLoader;
     this.enumeratorConfig = enumeratorConfig;
     this.scanContext = scanContext;
-    this.readerFactory = readerFactory;
+    this.readerFunction = readerFunction;
     this.assignerFactory = assignerFactory;
   }
 
@@ -88,7 +88,7 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
   public SourceReader<T, IcebergSourceSplit> createReader(SourceReaderContext readerContext) {
     return new IcebergSourceReader<>(
         readerContext,
-        readerFactory);
+        readerFunction);
   }
 
   @Override
@@ -152,7 +152,7 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
     // required
     private TableLoader tableLoader;
     private SplitAssignerFactory splitAssignerFactory;
-    private ReaderFactory<T> readerFactory;
+    private ReaderFunction<T> readerFunction;
 
     // optional
     private ScanContext scanContext;
@@ -173,8 +173,8 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
       return this;
     }
 
-    public Builder<T> readerFactory(ReaderFactory<T> newReaderFactory) {
-      this.readerFactory = newReaderFactory;
+    public Builder<T> readerFunction(ReaderFunction<T> newReaderFunction) {
+      this.readerFunction = newReaderFunction;
       return this;
     }
 
@@ -193,7 +193,7 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
       return new IcebergSource<>(
           tableLoader,
           scanContext,
-          readerFactory,
+          readerFunction,
           splitAssignerFactory,
           enumeratorConfig);
     }
@@ -201,7 +201,7 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
     private void checkRequired() {
       Preconditions.checkNotNull(tableLoader, "tableLoader is required.");
       Preconditions.checkNotNull(splitAssignerFactory, "asignerFactory is required.");
-      Preconditions.checkNotNull(readerFactory, "bulkFormat is required.");
+      Preconditions.checkNotNull(readerFunction, "bulkFormat is required.");
     }
   }
 }

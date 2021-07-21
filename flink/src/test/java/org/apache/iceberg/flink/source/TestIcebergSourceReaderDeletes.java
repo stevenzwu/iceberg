@@ -43,7 +43,7 @@ import org.apache.iceberg.flink.FlinkSchemaUtil;
 import org.apache.iceberg.flink.RowDataWrapper;
 import org.apache.iceberg.flink.TableLoader;
 import org.apache.iceberg.flink.source.assigner.SimpleSplitAssignerFactory;
-import org.apache.iceberg.flink.source.reader.RowDataIteratorReaderFactory;
+import org.apache.iceberg.flink.source.reader.RowDataIteratorReaderFunction;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.util.StructLikeSet;
@@ -93,7 +93,7 @@ public class TestIcebergSourceReaderDeletes extends TestFlinkReaderDeletesBase {
           IcebergSource.<RowData>builder()
               .tableLoader(tableLoader)
               .assignerFactory(new SimpleSplitAssignerFactory())
-              .readerFactory(new RowDataIteratorReaderFactory(config, table, scanContext, rowType))
+              .readerFunction(new RowDataIteratorReaderFunction(config, table, scanContext, rowType))
               .scanContext(scanContext)
               .build(),
           WatermarkStrategy.noWatermarks(),

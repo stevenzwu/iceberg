@@ -34,9 +34,9 @@ public class IcebergSourceReader<T> extends
 
   public IcebergSourceReader(
       SourceReaderContext context,
-      ReaderFactory<T> readerFactory) {
+      ReaderFunction<T> readerFunction) {
     super(
-        () -> new IcebergSourceSplitReader<>(readerFactory),
+        () -> new IcebergSourceSplitReader<>(readerFunction),
         new IcebergSourceRecordEmitter(),
         context.getConfiguration(),
         context);
