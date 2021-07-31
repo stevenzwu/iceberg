@@ -31,7 +31,6 @@ import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 
 public class InputFilesDecryptor {
-
   private final Map<String, InputFile> decryptedInputFiles;
 
   public InputFilesDecryptor(CombinedScanTask combinedTask, FileIO io, EncryptionManager encryption) {

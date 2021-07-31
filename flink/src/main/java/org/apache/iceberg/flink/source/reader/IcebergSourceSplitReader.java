@@ -24,6 +24,7 @@ import java.io.UncheckedIOException;
 import java.util.ArrayDeque;
 import java.util.Queue;
 import javax.annotation.Nullable;
+import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitReader;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitsChange;
@@ -37,6 +38,9 @@ class IcebergSourceSplitReader<T> implements SplitReader<RecordAndPosition<T>, I
   private static final Logger LOG = LoggerFactory.getLogger(IcebergSourceSplitReader.class);
 
   private final ReaderFunction<T> readerFunction;
+  private final int indexOfSubtask;
+  private final IcebergSourceReaderMetrics metrics;
+
   private final Queue<IcebergSourceSplit> splits;
 
   @Nullable
@@ -44,13 +48,18 @@ class IcebergSourceSplitReader<T> implements SplitReader<RecordAndPosition<T>, I
   @Nullable
   private String currentSplitId;
 
-  IcebergSourceSplitReader(ReaderFunction<T> readerFunction) {
+  IcebergSourceSplitReader(ReaderFunction<T> readerFunction,
+                           SourceReaderContext context,
+                           IcebergSourceReaderMetrics metrics) {
     this.readerFunction = readerFunction;
+    this.indexOfSubtask = context.getIndexOfSubtask();
+    this.metrics = metrics;
     this.splits = new ArrayDeque<>();
   }
 
   @Override
   public RecordsWithSplitIds<RecordAndPosition<T>> fetch() throws IOException {
+    metrics.recordSplitReaderFetches();
     checkSplitOrStartNext();
     if (currentReader.hasNext()) {
       // Because Iterator#next() doesn't support checked exception,
@@ -69,6 +78,7 @@ class IcebergSourceSplitReader<T> implements SplitReader<RecordAndPosition<T>, I
   public void handleSplitsChanges(SplitsChange<IcebergSourceSplit> splitsChanges) {
     LOG.debug("Add splits to reader: {}", splitsChanges.splits());
     splits.addAll(splitsChanges.splits());
+    metrics.incrementAssignedSplits(splitsChanges.splits().size());
   }
 
   @Override
@@ -92,7 +102,7 @@ class IcebergSourceSplitReader<T> implements SplitReader<RecordAndPosition<T>, I
       throw new IOException("No split remaining");
     }
     currentSplitId = nextSplit.splitId();
-    currentReader = readerFunction.apply(nextSplit);
+    currentReader = readerFunction.read(nextSplit);
   }
 
   private FileRecords<T> finishSplit() throws IOException {
@@ -101,7 +111,9 @@ class IcebergSourceSplitReader<T> implements SplitReader<RecordAndPosition<T>, I
       currentReader = null;
     }
     final FileRecords<T> finishRecords = FileRecords.finishedSplit(currentSplitId);
+    LOG.debug("Split reader {} finished split: {}", indexOfSubtask, currentSplitId);
     currentSplitId = null;
+    metrics.incrementFinishedSplits(1L);
     return finishRecords;
   }
 }

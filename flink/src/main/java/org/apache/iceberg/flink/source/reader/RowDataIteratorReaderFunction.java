@@ -38,13 +38,13 @@ public class RowDataIteratorReaderFunction extends DataIteratorReaderFunction<Ro
       Table table,
       ScanContext scanContext,
       RowType rowType) {
-    super(config, new ArrayPoolDataIteratorBatcher<>(config, new RowDataRecordFactory(rowType)));
+    super(new ArrayPoolDataIteratorBatcher<>(config, new RowDataRecordFactory(rowType)));
     this.table = table;
     this.scanContext = scanContext;
   }
 
   @Override
-  protected DataIterator<RowData> createDataIterator(IcebergSourceSplit split) {
+  public DataIterator<RowData> createDataIterator(IcebergSourceSplit split) {
     return new DataIterator<>(
         new RowDataIteratorReader(table.schema(),
             scanContext.project(),

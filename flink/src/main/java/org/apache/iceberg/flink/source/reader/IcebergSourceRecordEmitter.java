@@ -28,6 +28,12 @@ import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
 @Internal
 final class IcebergSourceRecordEmitter<T> implements RecordEmitter<RecordAndPosition<T>, T, IcebergSourceSplit> {
 
+  private final IcebergSourceReaderMetrics metrics;
+
+  IcebergSourceRecordEmitter(IcebergSourceReaderMetrics metrics) {
+    this.metrics = metrics;
+  }
+
   @Override
   public void emitRecord(
       RecordAndPosition<T> element,
@@ -35,6 +41,7 @@ final class IcebergSourceRecordEmitter<T> implements RecordEmitter<RecordAndPosi
       IcebergSourceSplit split) {
 
     output.collect(element.getRecord());
+    metrics.incrementNumRecordsOut(1L);
     split.updatePosition(element.getOffset(), element.getRecordSkipCount());
   }
 }

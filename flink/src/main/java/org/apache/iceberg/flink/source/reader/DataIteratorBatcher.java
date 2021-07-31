@@ -26,7 +26,7 @@ import org.apache.iceberg.flink.source.DataIterator;
 import org.apache.iceberg.io.CloseableIterator;
 
 @FunctionalInterface
-interface DataIteratorBatcher<T> extends Serializable {
+public interface DataIteratorBatcher<T> extends Serializable {
 
   CloseableIterator<RecordsWithSplitIds<RecordAndPosition<T>>> apply(String splitId, DataIterator<T> inputIterator);
 

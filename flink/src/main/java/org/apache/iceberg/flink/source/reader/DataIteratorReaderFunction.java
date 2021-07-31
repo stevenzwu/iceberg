@@ -19,27 +19,24 @@
 
 package org.apache.iceberg.flink.source.reader;
 
-import org.apache.flink.configuration.Configuration;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.file.src.util.RecordAndPosition;
 import org.apache.iceberg.flink.source.DataIterator;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
 import org.apache.iceberg.io.CloseableIterator;
 
-abstract class DataIteratorReaderFunction<T> implements ReaderFunction<T> {
+public abstract class DataIteratorReaderFunction<T> implements ReaderFunction<T> {
 
-  private final Configuration config;
   private final DataIteratorBatcher<T> batcher;
 
-  DataIteratorReaderFunction(Configuration config, DataIteratorBatcher<T> batcher) {
-    this.config = config;
+  DataIteratorReaderFunction(DataIteratorBatcher<T> batcher) {
     this.batcher = batcher;
   }
 
-  protected abstract DataIterator<T> createDataIterator(IcebergSourceSplit split);
+  public abstract DataIterator<T> createDataIterator(IcebergSourceSplit split);
 
   @Override
-  public CloseableIterator<RecordsWithSplitIds<RecordAndPosition<T>>> apply(IcebergSourceSplit split) {
+  public CloseableIterator<RecordsWithSplitIds<RecordAndPosition<T>>> read(IcebergSourceSplit split) {
     DataIterator<T> inputIterator = createDataIterator(split);
     if (split.position() != null) {
       inputIterator.seek(split.position());

@@ -20,6 +20,7 @@
 package org.apache.iceberg.flink.source;
 
 import java.io.IOException;
+import java.util.List;
 import javax.annotation.Nullable;
 import org.apache.flink.annotation.Experimental;
 import org.apache.flink.api.connector.source.Boundedness;
@@ -42,12 +43,16 @@ import org.apache.iceberg.flink.source.enumerator.IcebergEnumeratorState;
 import org.apache.iceberg.flink.source.enumerator.IcebergEnumeratorStateSerializer;
 import org.apache.iceberg.flink.source.enumerator.StaticIcebergEnumerator;
 import org.apache.iceberg.flink.source.reader.IcebergSourceReader;
+import org.apache.iceberg.flink.source.reader.IcebergSourceReaderMetrics;
 import org.apache.iceberg.flink.source.reader.ReaderFunction;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplitSerializer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Experimental
 public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEnumeratorState> {
+  private static final Logger LOG = LoggerFactory.getLogger(IcebergSource.class);
 
   private final TableLoader tableLoader;
   private final ScanContext scanContext;
@@ -86,9 +91,11 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
 
   @Override
   public SourceReader<T, IcebergSourceSplit> createReader(SourceReaderContext readerContext) {
+    final IcebergSourceReaderMetrics readerMetrics = new IcebergSourceReaderMetrics(readerContext.metricGroup());
     return new IcebergSourceReader<>(
+        readerFunction,
         readerContext,
-        readerFunction);
+        readerMetrics);
   }
 
   @Override
@@ -126,9 +133,17 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
       // As FLINK-16866 supports non-blocking job submission since 1.12,
       // heavy job initialization won't lead to request timeout for job submission.
       if (enumeratorConfig.splitDiscoveryInterval() == null) {
-        assigner.onDiscoveredSplits(FlinkSplitGenerator.planIcebergSourceSplits(table, scanContext));
+        final List<IcebergSourceSplit> splits = FlinkSplitGenerator.planIcebergSourceSplits(table, scanContext);
+        assigner.onDiscoveredSplits(splits);
+        LOG.info("Iceberg source started in batch execution mode with {} splits discovered from table {}",
+            splits.size(), table.name());
+      } else {
+        LOG.info("Iceberg source started in streaming execution mode for table {} with discovery interval at {}",
+            table.name(), enumeratorConfig.splitDiscoveryInterval());
       }
     } else {
+      LOG.info("Iceberg source restored {} splits from state for table {}",
+          enumState.pendingSplits().size(), table.name());
       assigner = assignerFactory.createAssigner(enumState.pendingSplits());
     }
 

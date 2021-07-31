@@ -30,7 +30,7 @@ import org.apache.iceberg.io.CloseableIterator;
 /**
  * A batch of recrods for one split
  */
-class FileRecords<T> implements RecordsWithSplitIds<RecordAndPosition<T>> {
+public class FileRecords<T> implements RecordsWithSplitIds<RecordAndPosition<T>> {
 
   @Nullable
   private final CloseableIterator<RecordAndPosition<T>> recordsForSplit;
