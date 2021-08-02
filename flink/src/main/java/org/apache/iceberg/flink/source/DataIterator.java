@@ -29,6 +29,7 @@ import org.apache.iceberg.encryption.EncryptionManager;
 import org.apache.iceberg.encryption.InputFilesDecryptor;
 import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.io.FileIO;
+import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 
 /**
  * Flink data iterator that reads {@link CombinedScanTask} into a {@link CloseableIterator}

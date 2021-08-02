@@ -24,7 +24,7 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.flink.source.DataIterator;
-import org.apache.iceberg.flink.source.RowDataIterator;
+import org.apache.iceberg.flink.source.RowDataIteratorReader;
 import org.apache.iceberg.flink.source.ScanContext;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
 
@@ -45,13 +45,13 @@ public class RowDataIteratorReaderFunction extends DataIteratorReaderFunction<Ro
 
   @Override
   protected DataIterator<RowData> createDataIterator(IcebergSourceSplit split) {
-    return new RowDataIterator(
+    return new DataIterator<>(
+        new RowDataIteratorReader(table.schema(),
+            scanContext.project(),
+            scanContext.nameMapping(),
+            scanContext.caseSensitive()),
         split.task(),
         table.io(),
-        table.encryption(),
-        table.schema(),
-        scanContext.project(),
-        scanContext.nameMapping(),
-        scanContext.caseSensitive());
+        table.encryption());
   }
 }
