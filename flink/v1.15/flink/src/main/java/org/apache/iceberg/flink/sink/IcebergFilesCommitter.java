@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.NavigableMap;
 import java.util.SortedMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
@@ -97,6 +98,7 @@ class IcebergFilesCommitter extends AbstractStreamOperator<Void>
   // It will have an unique identifier for one job.
   private transient String flinkJobId;
   private transient Table table;
+  private transient IcebergFilesCommitterMetrics committerMetrics;
   private transient ManifestOutputFileFactory manifestOutputFileFactory;
   private transient long maxCommittedCheckpointId;
   private transient int continuousEmptyCheckpoints;
@@ -131,6 +133,7 @@ class IcebergFilesCommitter extends AbstractStreamOperator<Void>
     // Open the table loader and load the table.
     this.tableLoader.open();
     this.table = tableLoader.loadTable();
+    this.committerMetrics = new IcebergFilesCommitterMetrics(super.metrics, table.name());
 
     maxContinuousEmptyCommits = PropertyUtil.propertyAsInt(table.properties(), MAX_CONTINUOUS_EMPTY_COMMITS, 10);
     Preconditions.checkArgument(maxContinuousEmptyCommits > 0,
@@ -173,6 +176,7 @@ class IcebergFilesCommitter extends AbstractStreamOperator<Void>
     LOG.info("Start to flush snapshot state to state backend, table: {}, checkpointId: {}", table, checkpointId);
 
     // Update the checkpoint state.
+    long startNano = System.nanoTime();
     dataFilesPerCheckpoint.put(checkpointId, writeToManifest(checkpointId));
     // Reset the snapshot state to the latest state.
     checkpointsState.clear();
@@ -183,6 +187,7 @@ class IcebergFilesCommitter extends AbstractStreamOperator<Void>
 
     // Clear the local buffer for current checkpoint.
     writeResultsOfCurrentCkpt.clear();
+    committerMetrics.checkpointDuration(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNano));
   }
 
   @Override
@@ -219,20 +224,29 @@ class IcebergFilesCommitter extends AbstractStreamOperator<Void>
       manifests.addAll(deltaManifests.manifests());
     }
 
-    int totalFiles = pendingResults.values().stream()
-        .mapToInt(r -> r.dataFiles().length + r.deleteFiles().length).sum();
+    CommitStats stats = new CommitStats(pendingResults);
+    commitPendingResult(pendingResults, newFlinkJobId, checkpointId, stats);
+    pendingMap.clear();
+    committerMetrics.updateCommitStats(stats);
+    deleteCommittedManifests(manifests, newFlinkJobId, checkpointId);
+  }
+
+  private void commitPendingResult(NavigableMap<Long, WriteResult> pendingResults, String newFlinkJobId,
+                                   long checkpointId, CommitStats stats) {
+    long totalFiles = stats.dataFilesCount() + stats.deleteFilesCount();
     continuousEmptyCheckpoints = totalFiles == 0 ? continuousEmptyCheckpoints + 1 : 0;
     if (totalFiles != 0 || continuousEmptyCheckpoints % maxContinuousEmptyCommits == 0) {
       if (replacePartitions) {
-        replacePartitions(pendingResults, newFlinkJobId, checkpointId);
+        replacePartitions(pendingResults, newFlinkJobId, checkpointId, stats);
       } else {
-        commitDeltaTxn(pendingResults, newFlinkJobId, checkpointId);
+        commitDeltaTxn(pendingResults, newFlinkJobId, checkpointId, stats);
       }
+
       continuousEmptyCheckpoints = 0;
     }
-    pendingMap.clear();
+  }
 
-    // Delete the committed manifests.
+  private void deleteCommittedManifests(List<ManifestFile> manifests, String newFlinkJobId, long checkpointId) {
     for (ManifestFile manifest : manifests) {
       try {
         table.io().deleteFile(manifest.path());
@@ -243,48 +257,34 @@ class IcebergFilesCommitter extends AbstractStreamOperator<Void>
             .add("checkpointId", checkpointId)
             .add("manifestPath", manifest.path())
             .toString();
-        LOG.warn("The iceberg transaction has been committed, but we failed to clean the temporary flink manifests: {}",
+        LOG.warn("Failed to clean up the temporary flink manifests after successful commit: {}",
             details, e);
       }
     }
   }
 
   private void replacePartitions(NavigableMap<Long, WriteResult> pendingResults, String newFlinkJobId,
-                                 long checkpointId) {
-    // Partition overwrite does not support delete files.
-    int deleteFilesNum = pendingResults.values().stream().mapToInt(r -> r.deleteFiles().length).sum();
-    Preconditions.checkState(deleteFilesNum == 0, "Cannot overwrite partitions with delete files.");
-
-    // Commit the overwrite transaction.
+                                 long checkpointId, CommitStats stats) {
+    Preconditions.checkState(stats.deleteFilesCount() == 0, "Cannot overwrite partitions with delete files.");
     ReplacePartitions dynamicOverwrite = table.newReplacePartitions().scanManifestsWith(workerPool);
-
-    int numFiles = 0;
     for (WriteResult result : pendingResults.values()) {
       Preconditions.checkState(result.referencedDataFiles().length == 0, "Should have no referenced data files.");
-
-      numFiles += result.dataFiles().length;
       Arrays.stream(result.dataFiles()).forEach(dynamicOverwrite::addFile);
     }
-
-    commitOperation(dynamicOverwrite, numFiles, 0, "dynamic partition overwrite", newFlinkJobId, checkpointId);
+    commitOperation(dynamicOverwrite, "dynamic partition overwrite", newFlinkJobId, checkpointId, stats);
   }
 
-  private void commitDeltaTxn(NavigableMap<Long, WriteResult> pendingResults, String newFlinkJobId, long checkpointId) {
-    int deleteFilesNum = pendingResults.values().stream().mapToInt(r -> r.deleteFiles().length).sum();
-
-    if (deleteFilesNum == 0) {
+  private void commitDeltaTxn(NavigableMap<Long, WriteResult> pendingResults, String newFlinkJobId, long checkpointId,
+                              CommitStats stats) {
+    if (stats.deleteFilesCount() == 0) {
       // To be compatible with iceberg format V1.
       AppendFiles appendFiles = table.newAppend().scanManifestsWith(workerPool);
-
-      int numFiles = 0;
       for (WriteResult result : pendingResults.values()) {
-        Preconditions.checkState(result.referencedDataFiles().length == 0, "Should have no referenced data files.");
-
-        numFiles += result.dataFiles().length;
+        Preconditions.checkState(result.referencedDataFiles().length == 0,
+            "Should have no referenced data files for append.");
         Arrays.stream(result.dataFiles()).forEach(appendFiles::appendFile);
       }
-
-      commitOperation(appendFiles, numFiles, 0, "append", newFlinkJobId, checkpointId);
+      commitOperation(appendFiles, "append", newFlinkJobId, checkpointId, stats);
     } else {
       // To be compatible with iceberg format V2.
       for (Map.Entry<Long, WriteResult> e : pendingResults.entrySet()) {
@@ -301,30 +301,26 @@ class IcebergFilesCommitter extends AbstractStreamOperator<Void>
         // position delete files that are being committed.
         RowDelta rowDelta = table.newRowDelta().scanManifestsWith(workerPool);
 
-        int numDataFiles = result.dataFiles().length;
         Arrays.stream(result.dataFiles()).forEach(rowDelta::addRows);
-
-        int numDeleteFiles = result.deleteFiles().length;
         Arrays.stream(result.deleteFiles()).forEach(rowDelta::addDeletes);
-
-        commitOperation(rowDelta, numDataFiles, numDeleteFiles, "rowDelta", newFlinkJobId, e.getKey());
+        commitOperation(rowDelta, "rowDelta", newFlinkJobId, e.getKey(), stats);
       }
     }
   }
 
-  private void commitOperation(SnapshotUpdate<?> operation, int numDataFiles, int numDeleteFiles, String description,
-                               String newFlinkJobId, long checkpointId) {
-    LOG.info("Committing {} with {} data files and {} delete files to table {}", description, numDataFiles,
-        numDeleteFiles, table);
+  private void commitOperation(SnapshotUpdate<?> operation, String description, String newFlinkJobId,
+                               long checkpointId, CommitStats stats) {
+    LOG.info("Committing {} to table {}: {}", description, table.name(), stats);
     snapshotProperties.forEach(operation::set);
     // custom snapshot metadata properties will be overridden if they conflict with internal ones used by the sink.
     operation.set(MAX_COMMITTED_CHECKPOINT_ID, Long.toString(checkpointId));
     operation.set(FLINK_JOB_ID, newFlinkJobId);
 
-    long start = System.currentTimeMillis();
+    long startNano = System.nanoTime();
     operation.commit(); // abort is automatically called if this fails.
-    long duration = System.currentTimeMillis() - start;
-    LOG.info("Committed in {} ms", duration);
+    long durationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNano);
+    LOG.info("Committed {} to table {} in {} ms: {}", description, table.name(), durationMs, stats);
+    committerMetrics.commitDuration(durationMs);
   }
 
   @Override
@@ -364,7 +360,6 @@ class IcebergFilesCommitter extends AbstractStreamOperator<Void>
     final String operatorID = getRuntimeContext().getOperatorUniqueID();
     this.workerPool = ThreadPools.newWorkerPool("iceberg-worker-pool-" + operatorID, workerPoolSize);
   }
-
   @Override
   public void close() throws Exception {
     if (tableLoader != null) {

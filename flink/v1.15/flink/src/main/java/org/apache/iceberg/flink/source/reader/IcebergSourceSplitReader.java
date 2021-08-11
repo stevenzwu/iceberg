@@ -31,6 +31,7 @@ import org.apache.flink.connector.base.source.reader.splitreader.SplitReader;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitsAddition;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitsChange;
 import org.apache.iceberg.FileScanTask;
+import org.apache.iceberg.flink.FlinkMetricsContext;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
 import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.metrics.MetricsContext.Counter;
@@ -57,16 +58,16 @@ class IcebergSourceSplitReader<T> implements SplitReader<RecordAndPosition<T>, I
 
   IcebergSourceSplitReader(ReaderFunction<T> openSplitFunction,
                            SourceReaderContext context,
-                           ReaderMetricsContext metrics) {
+                           FlinkMetricsContext metrics) {
     this.openSplitFunction = openSplitFunction;
     this.indexOfSubtask = context.getIndexOfSubtask();
     this.splits = new ArrayDeque<>();
 
-    this.assignedSplits = metrics.counter(ReaderMetricsContext.ASSIGNED_SPLITS, Long.class, Unit.COUNT);
-    this.assignedBytes = metrics.counter(ReaderMetricsContext.ASSIGNED_BYTES, Long.class, Unit.COUNT);
-    this.finishedSplits = metrics.counter(ReaderMetricsContext.FINISHED_SPLITS, Long.class, Unit.COUNT);
-    this.finishedBytes = metrics.counter(ReaderMetricsContext.FINISHED_BYTES, Long.class, Unit.COUNT);
-    this.splitReaderFetchCalls = metrics.counter(ReaderMetricsContext.SPLIT_READER_FETCH_CALLS, Long.class, Unit.COUNT);
+    this.assignedSplits = metrics.counter("assignedSplits", Long.class, Unit.COUNT);
+    this.assignedBytes = metrics.counter("assignedBytes", Long.class, Unit.COUNT);
+    this.finishedSplits = metrics.counter("finishedSplits", Long.class, Unit.COUNT);
+    this.finishedBytes = metrics.counter("finishedBytes", Long.class, Unit.COUNT);
+    this.splitReaderFetchCalls = metrics.counter("splitReaderFetchCalls", Long.class, Unit.COUNT);
   }
 
   @Override

@@ -24,6 +24,7 @@ import java.util.Collections;
 import java.util.Map;
 import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.connector.base.source.reader.SingleThreadMultiplexSourceReaderBase;
+import org.apache.iceberg.flink.FlinkMetricsContext;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
 import org.apache.iceberg.flink.source.split.SplitRequestEvent;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
@@ -34,7 +35,7 @@ public class IcebergSourceReader<T> extends
   public IcebergSourceReader(
       ReaderFunction<T> readerFunction,
       SourceReaderContext context,
-      ReaderMetricsContext metrics) {
+      FlinkMetricsContext metrics) {
     super(
         () -> new IcebergSourceSplitReader<>(readerFunction, context, metrics),
         new IcebergSourceRecordEmitter<>(),
