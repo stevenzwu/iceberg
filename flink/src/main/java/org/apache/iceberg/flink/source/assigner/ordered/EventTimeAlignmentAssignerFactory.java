@@ -24,6 +24,7 @@ import java.util.Map;
 import org.apache.flink.api.common.eventtime.TimestampAssigner;
 import org.apache.iceberg.flink.source.assigner.SplitAssignerFactory;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
+import org.apache.iceberg.flink.source.split.IcebergSourceSplitStatus;
 
 public class EventTimeAlignmentAssignerFactory implements SplitAssignerFactory {
   private final String sourceName;
@@ -57,7 +58,7 @@ public class EventTimeAlignmentAssignerFactory implements SplitAssignerFactory {
   }
 
   @Override
-  public EventTimeAlignmentAssigner createAssigner(Map<IcebergSourceSplit, IcebergSourceSplit.Status> state) {
+  public EventTimeAlignmentAssigner createAssigner(Map<IcebergSourceSplit, IcebergSourceSplitStatus> state) {
     return new EventTimeAlignmentAssigner(maxMisalignmentThreshold,
         state,
         trackerFactory.<String>apply("iceberg").forPartition(sourceName),

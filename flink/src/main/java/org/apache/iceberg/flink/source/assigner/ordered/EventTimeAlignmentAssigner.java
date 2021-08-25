@@ -30,6 +30,7 @@ import org.apache.flink.api.common.eventtime.TimestampAssigner;
 import org.apache.iceberg.flink.source.assigner.GetSplitResult;
 import org.apache.iceberg.flink.source.assigner.SplitAssigner;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
+import org.apache.iceberg.flink.source.split.IcebergSourceSplitStatus;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.slf4j.Logger;
@@ -57,7 +58,7 @@ class EventTimeAlignmentAssigner implements SplitAssigner, WatermarkTracker.List
   }
 
   EventTimeAlignmentAssigner(
-      Duration maxMisalignmentThreshold, Map<IcebergSourceSplit, IcebergSourceSplit.Status> currentState,
+      Duration maxMisalignmentThreshold, Map<IcebergSourceSplit, IcebergSourceSplitStatus> currentState,
       WatermarkTracker watermarkTracker,
       TimestampAssigner<IcebergSourceSplit> timestampAssigner,
       Clock clock) {
@@ -138,7 +139,7 @@ class EventTimeAlignmentAssigner implements SplitAssigner, WatermarkTracker.List
   }
 
   @Override
-  public Map<IcebergSourceSplit, IcebergSourceSplit.Status> state() {
+  public Map<IcebergSourceSplit, IcebergSourceSplitStatus> state() {
     return null;
   }
 

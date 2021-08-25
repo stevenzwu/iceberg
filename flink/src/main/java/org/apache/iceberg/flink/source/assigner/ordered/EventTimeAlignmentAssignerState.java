@@ -35,7 +35,7 @@ import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
-import org.apache.iceberg.flink.source.split.IcebergSourceSplit.Status;
+import org.apache.iceberg.flink.source.split.IcebergSourceSplitStatus;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.apache.iceberg.relocated.com.google.common.base.MoreObjects;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
@@ -63,7 +63,7 @@ class EventTimeAlignmentAssignerState {
     this(Collections.emptyMap(), clock);
   }
 
-  EventTimeAlignmentAssignerState(Map<IcebergSourceSplit, Status> currentState, Clock clock) {
+  EventTimeAlignmentAssignerState(Map<IcebergSourceSplit, IcebergSourceSplitStatus> currentState, Clock clock) {
     this.splitStateMap = new ConcurrentHashMap<>();
     currentState.forEach((split, status) -> splitStateMap.put(split.splitId(), new SplitState(split, status)));
     this.noMoreSplits = false;
@@ -115,14 +115,13 @@ class EventTimeAlignmentAssignerState {
   public synchronized EventTimeAlignmentAssignerState assignSplits(
       List<IcebergSourceSplit> splits, @Nullable String hostName) {
     if (!splits.isEmpty()) {
-      splits
-          .forEach(
-              split -> Preconditions.checkArgument(splitStateMap.get(split.splitId()).assignTo(hostName) ==
-                  Status.UNASSIGNED));
+      splits.forEach(split ->
+          Preconditions.checkArgument(splitStateMap.get(split.splitId()).assignTo(hostName) ==
+                  IcebergSourceSplitStatus.UNASSIGNED));
 
       numAssignedSplits += splits.size();
       updateTs();
-      updateListeners(splits, Status.UNASSIGNED, Status.ASSIGNED);
+      updateListeners(splits, IcebergSourceSplitStatus.UNASSIGNED, IcebergSourceSplitStatus.ASSIGNED);
     }
 
     return this;
@@ -133,28 +132,28 @@ class EventTimeAlignmentAssignerState {
       return this;
     }
 
-    List<Tuple2<IcebergSourceSplit.Status, IcebergSourceSplit>> modifiedSplits =
+    List<Tuple2<IcebergSourceSplitStatus, IcebergSourceSplit>> modifiedSplits =
         splits
             .stream()
             .map(
                 split -> {
-                  IcebergSourceSplit.Status res = splitStateMap.get(split.splitId()).unassign();
+                  IcebergSourceSplitStatus res = splitStateMap.get(split.splitId()).unassign();
                   return new Tuple2<>(res, split);
                 })
-            .filter(t -> t.f0 == IcebergSourceSplit.Status.ASSIGNED || t.f0 == IcebergSourceSplit.Status.COMPLETED)
+            .filter(t -> t.f0 == IcebergSourceSplitStatus.ASSIGNED || t.f0 == IcebergSourceSplitStatus.COMPLETED)
             .collect(Collectors.toList());
 
     List<IcebergSourceSplit> previousAssignedSplits =
         modifiedSplits
             .stream()
-            .filter(status -> status.f0 == IcebergSourceSplit.Status.ASSIGNED)
+            .filter(status -> status.f0 == IcebergSourceSplitStatus.ASSIGNED)
             .map(t -> t.f1)
             .collect(Collectors.toList());
 
     List<IcebergSourceSplit> previousCompletedSplits =
         modifiedSplits
             .stream()
-            .filter(status -> status.f0 == IcebergSourceSplit.Status.COMPLETED)
+            .filter(status -> status.f0 == IcebergSourceSplitStatus.COMPLETED)
             .map(t -> t.f1)
             .collect(Collectors.toList());
 
@@ -168,8 +167,8 @@ class EventTimeAlignmentAssignerState {
 
     updateTs();
 
-    updateListeners(previousAssignedSplits, Status.ASSIGNED, Status.UNASSIGNED);
-    updateListeners(previousCompletedSplits, Status.COMPLETED, Status.UNASSIGNED);
+    updateListeners(previousAssignedSplits, IcebergSourceSplitStatus.ASSIGNED, IcebergSourceSplitStatus.UNASSIGNED);
+    updateListeners(previousCompletedSplits, IcebergSourceSplitStatus.COMPLETED, IcebergSourceSplitStatus.UNASSIGNED);
     return this;
   }
 
@@ -177,7 +176,7 @@ class EventTimeAlignmentAssignerState {
     List<IcebergSourceSplit> completedSplitIds =
         splitIds
             .stream()
-            .filter(splitId -> splitStateMap.get(splitId).complete() == IcebergSourceSplit.Status.ASSIGNED)
+            .filter(splitId -> splitStateMap.get(splitId).complete() == IcebergSourceSplitStatus.ASSIGNED)
             .map(splitId -> splitStateMap.get(splitId).getSplit())
             .collect(Collectors.toList());
 
@@ -185,7 +184,7 @@ class EventTimeAlignmentAssignerState {
       numAssignedSplits -= completedSplitIds.size();
       numCompletedSplits += completedSplitIds.size();
       updateTs();
-      updateListeners(completedSplitIds, Status.ASSIGNED, Status.COMPLETED);
+      updateListeners(completedSplitIds, IcebergSourceSplitStatus.ASSIGNED, IcebergSourceSplitStatus.COMPLETED);
 
       // check if we have reached the terminal condition
       if (isTerminal()) {
@@ -231,13 +230,13 @@ class EventTimeAlignmentAssignerState {
   }
 
   private void updateListeners(
-      Collection<IcebergSourceSplit> splits, Status oldStatus, Status newStatus) {
+      Collection<IcebergSourceSplit> splits, IcebergSourceSplitStatus oldStatus, IcebergSourceSplitStatus newStatus) {
     if (!splits.isEmpty()) {
       switch (newStatus) {
         case UNASSIGNED:
-          if (oldStatus == Status.COMPLETED) {
+          if (oldStatus == IcebergSourceSplitStatus.COMPLETED) {
             listeners.keySet().forEach(listener -> listener.onSplitsAdded(splits));
-          } else if (oldStatus == Status.ASSIGNED) {
+          } else if (oldStatus == IcebergSourceSplitStatus.ASSIGNED) {
             listeners.keySet().forEach(listener -> listener.onSplitsUnassigned(splits));
           } else {
             throw new IllegalArgumentException();
@@ -336,28 +335,28 @@ class EventTimeAlignmentAssignerState {
   static class SplitState implements Serializable {
 
     private IcebergSourceSplit split;
-    private IcebergSourceSplit.Status status;
+    private IcebergSourceSplitStatus status;
     private String subtaskId;
 
-    SplitState(IcebergSourceSplit split, IcebergSourceSplit.Status status) {
+    SplitState(IcebergSourceSplit split, IcebergSourceSplitStatus status) {
       this.split = split;
       this.status = status;
       this.subtaskId = null;
     }
 
     private static SplitState of(IcebergSourceSplit split) {
-      return new SplitState(split, IcebergSourceSplit.Status.UNASSIGNED);
+      return new SplitState(split, IcebergSourceSplitStatus.UNASSIGNED);
     }
 
-    private synchronized IcebergSourceSplit.Status assignTo(@Nullable String hostName) {
+    private synchronized IcebergSourceSplitStatus assignTo(@Nullable String hostName) {
       switch (status) {
         case ASSIGNED:
           Preconditions.checkArgument(hostName == null || this.subtaskId.equals(hostName));
-          return IcebergSourceSplit.Status.ASSIGNED;
+          return IcebergSourceSplitStatus.ASSIGNED;
         case UNASSIGNED:
-          this.status = IcebergSourceSplit.Status.ASSIGNED;
+          this.status = IcebergSourceSplitStatus.ASSIGNED;
           this.subtaskId = hostName;
-          return IcebergSourceSplit.Status.UNASSIGNED;
+          return IcebergSourceSplitStatus.UNASSIGNED;
         default:
           throw new IllegalArgumentException(
               String.format(
@@ -365,13 +364,13 @@ class EventTimeAlignmentAssignerState {
       }
     }
 
-    private synchronized IcebergSourceSplit.Status complete() {
+    private synchronized IcebergSourceSplitStatus complete() {
       switch (status) {
         case COMPLETED:
-          return IcebergSourceSplit.Status.COMPLETED;
+          return IcebergSourceSplitStatus.COMPLETED;
         case ASSIGNED:
-          this.status = IcebergSourceSplit.Status.COMPLETED;
-          return IcebergSourceSplit.Status.ASSIGNED;
+          this.status = IcebergSourceSplitStatus.COMPLETED;
+          return IcebergSourceSplitStatus.ASSIGNED;
         default:
           throw new IllegalArgumentException(
               String.format(
@@ -379,35 +378,35 @@ class EventTimeAlignmentAssignerState {
       }
     }
 
-    private synchronized IcebergSourceSplit.Status unassign() {
+    private synchronized IcebergSourceSplitStatus unassign() {
       switch (status) {
         case UNASSIGNED:
-          return IcebergSourceSplit.Status.UNASSIGNED;
+          return IcebergSourceSplitStatus.UNASSIGNED;
         case ASSIGNED:
-          this.status = IcebergSourceSplit.Status.UNASSIGNED;
+          this.status = IcebergSourceSplitStatus.UNASSIGNED;
           this.subtaskId = null;
-          return IcebergSourceSplit.Status.ASSIGNED;
+          return IcebergSourceSplitStatus.ASSIGNED;
         case COMPLETED:
-          this.status = IcebergSourceSplit.Status.UNASSIGNED;
+          this.status = IcebergSourceSplitStatus.UNASSIGNED;
           this.subtaskId = null;
           log.warn(
               "This transition should not be possible as the split is currently in {} state", this);
-          return IcebergSourceSplit.Status.COMPLETED;
+          return IcebergSourceSplitStatus.COMPLETED;
         default:
           throw new IllegalArgumentException(String.format("Unexpected status %s", status));
       }
     }
 
     private boolean isUnassigned() {
-      return status.equals(IcebergSourceSplit.Status.UNASSIGNED);
+      return status.equals(IcebergSourceSplitStatus.UNASSIGNED);
     }
 
     private boolean isAssigned() {
-      return status.equals(IcebergSourceSplit.Status.ASSIGNED);
+      return status.equals(IcebergSourceSplitStatus.ASSIGNED);
     }
 
     private boolean isCompleted() {
-      return status.equals(IcebergSourceSplit.Status.COMPLETED);
+      return status.equals(IcebergSourceSplitStatus.COMPLETED);
     }
 
     public IcebergSourceSplit getSplit() {
