@@ -31,7 +31,7 @@ public class IcebergSourceReaderMetrics {
   private final Counter splitReaderFetches;
 
   public IcebergSourceReaderMetrics(MetricGroup metricGroup) {
-    final MetricGroup readerMetricGroup = metricGroup.addGroup("KafkaSourceReader");
+    final MetricGroup readerMetricGroup = metricGroup.addGroup("IcebergSourceReader");
 
     this.numRecordsOut = new AtomicLong();
     this.assignedSplits = new AtomicLong();
