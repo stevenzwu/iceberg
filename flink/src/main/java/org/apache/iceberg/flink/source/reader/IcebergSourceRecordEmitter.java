@@ -27,7 +27,6 @@ import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
 
 @Internal
 final class IcebergSourceRecordEmitter<T> implements RecordEmitter<RecordAndPosition<T>, T, IcebergSourceSplit> {
-
   private final IcebergSourceReaderMetrics metrics;
 
   IcebergSourceRecordEmitter(IcebergSourceReaderMetrics metrics) {
