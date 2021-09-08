@@ -42,7 +42,7 @@ import org.apache.iceberg.flink.TableLoader;
 import org.apache.iceberg.flink.TestFixtures;
 import org.apache.iceberg.flink.data.RowDataToRowMapper;
 import org.apache.iceberg.flink.source.assigner.SimpleSplitAssignerFactory;
-import org.apache.iceberg.flink.source.reader.RowDataIteratorReaderFunction;
+import org.apache.iceberg.flink.source.reader.RowDataReaderFunction;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
@@ -117,7 +117,7 @@ public class TestIcebergSourceBounded extends TestFlinkScan {
         IcebergSource.<RowData>builder()
             .tableLoader(tableLoader())
             .assignerFactory(new SimpleSplitAssignerFactory())
-            .readerFunction(new RowDataIteratorReaderFunction(config, table, scanContext, rowType))
+            .readerFunction(new RowDataReaderFunction(config, table, scanContext, rowType))
             .scanContext(scanContext)
             .build(),
         WatermarkStrategy.noWatermarks(),

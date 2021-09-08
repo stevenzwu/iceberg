@@ -106,7 +106,7 @@ public class TestIcebergSourceSplitReader {
     final Configuration config = new Configuration();
     RowType rowType = FlinkSchemaUtil.convert(tableResource.table().schema());
     return new IcebergSourceSplitReader(
-        new RowDataIteratorReaderFunction(config, tableResource.table(), scanContext, rowType),
+        new RowDataReaderFunction(config, tableResource.table(), scanContext, rowType),
         new TestingReaderContext(),
         new IcebergSourceReaderMetrics(new UnregisteredMetricsGroup()));
   }

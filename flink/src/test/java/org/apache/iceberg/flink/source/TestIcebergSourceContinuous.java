@@ -52,7 +52,7 @@ import org.apache.iceberg.flink.TestHelpers;
 import org.apache.iceberg.flink.data.RowDataToRowMapper;
 import org.apache.iceberg.flink.source.assigner.SimpleSplitAssignerFactory;
 import org.apache.iceberg.flink.source.enumerator.IcebergEnumeratorConfig;
-import org.apache.iceberg.flink.source.reader.RowDataIteratorReaderFunction;
+import org.apache.iceberg.flink.source.reader.RowDataReaderFunction;
 import org.junit.Assert;
 import org.junit.ClassRule;
 import org.junit.Rule;
@@ -316,7 +316,7 @@ public class TestIcebergSourceContinuous {
         IcebergSource.<RowData>builder()
             .tableLoader(tableResource.tableLoader())
             .assignerFactory(new SimpleSplitAssignerFactory())
-            .readerFunction(new RowDataIteratorReaderFunction(config, tableResource.table(), scanContext, rowType))
+            .readerFunction(new RowDataReaderFunction(config, tableResource.table(), scanContext, rowType))
             .scanContext(scanContext)
             .enumeratorConfig(enumeratorConfig)
             .build(),
