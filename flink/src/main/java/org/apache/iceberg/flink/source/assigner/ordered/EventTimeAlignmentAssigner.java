@@ -47,7 +47,7 @@ class EventTimeAlignmentAssigner implements SplitAssigner, WatermarkTracker.List
   private final UnassignedSplitsMaintainer unassignedSplitsMaintainer;
   private final WatermarkUpdater watermarkUpdater;
 
-  private final FutureNotifier futureNotifier;
+  private CompletableFuture<Void> availableFuture;
   private boolean closed = false;
 
   EventTimeAlignmentAssigner(
@@ -65,7 +65,6 @@ class EventTimeAlignmentAssigner implements SplitAssigner, WatermarkTracker.List
     this.maxMisalignmentThreshold = maxMisalignmentThreshold;
     this.watermarkTracker = watermarkTracker;
     this.timestampAssigner = timestampAssigner;
-    this.futureNotifier = new FutureNotifier();
     this.assignerState = new EventTimeAlignmentAssignerState(currentState, clock);
     this.unassignedSplitsMaintainer =
         new UnassignedSplitsMaintainer(new AscendingTimestampSplitComparator(timestampAssigner), this.assignerState);
@@ -81,7 +80,7 @@ class EventTimeAlignmentAssigner implements SplitAssigner, WatermarkTracker.List
   public void close() {
     watermarkTracker.removeListener(this);
     closed = true;
-    notifyListener();
+    completeAvailableFuturesIfNeeded();
   }
 
   @Override
@@ -130,33 +129,48 @@ class EventTimeAlignmentAssigner implements SplitAssigner, WatermarkTracker.List
 
   @Override
   public void onDiscoveredSplits(Collection<IcebergSourceSplit> splits) {
-
+    assignerState.addSplits(splits);
   }
 
   @Override
   public void onUnassignedSplits(Collection<IcebergSourceSplit> splits) {
+    assignerState.unassignSplits(splits);
+  }
 
+  @Override
+  public void onCompletedSplits(Collection<String> completedSplitIds) {
+    assignerState.completeSplits(completedSplitIds);
   }
 
   @Override
   public Map<IcebergSourceSplit, IcebergSourceSplitStatus> state() {
-    return null;
+    return assignerState.snapshotState();
   }
 
   @Override
   public CompletableFuture<Void> isAvailable() {
-    return null;
+    if (availableFuture == null) {
+      availableFuture = new CompletableFuture<>();
+    }
+    return availableFuture;
   }
 
   @Override
   public void onWatermarkChange(Long watermark) {
     Preconditions.checkArgument(!closed, "strategy is already closed");
     log.info("Global watermark changed to {}; letting listeners know", watermark);
-    notifyListener();
+    completeAvailableFuturesIfNeeded();
   }
 
-  private void notifyListener() {
-    // Simply complete the future and return;
-    futureNotifier.notifyComplete();
+  /**
+   * For now, we just simply complete the available future.
+   * Let enumerator to try {@link #getNext(String)} again
+   * and see if there is any assignable split.
+   */
+  private synchronized void completeAvailableFuturesIfNeeded() {
+    if (availableFuture != null) {
+      availableFuture.complete(null);
+    }
+    availableFuture = null;
   }
 }

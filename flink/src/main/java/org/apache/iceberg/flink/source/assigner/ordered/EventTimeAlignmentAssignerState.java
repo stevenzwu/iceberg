@@ -28,7 +28,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
@@ -81,7 +80,7 @@ class EventTimeAlignmentAssignerState {
     listeners.remove(handler);
   }
 
-  public synchronized EventTimeAlignmentAssignerState addSplits(List<IcebergSourceSplit> splits) {
+  public synchronized EventTimeAlignmentAssignerState addSplits(Collection<IcebergSourceSplit> splits) {
     Preconditions.checkArgument(!noMoreSplits, "no more splits can be added");
     List<IcebergSourceSplit> addedSplits =
         splits
@@ -127,7 +126,7 @@ class EventTimeAlignmentAssignerState {
     return this;
   }
 
-  public synchronized EventTimeAlignmentAssignerState unassignSplits(List<IcebergSourceSplit> splits) {
+  public synchronized EventTimeAlignmentAssignerState unassignSplits(Collection<IcebergSourceSplit> splits) {
     if (splits.isEmpty()) {
       return this;
     }
@@ -172,7 +171,7 @@ class EventTimeAlignmentAssignerState {
     return this;
   }
 
-  public synchronized EventTimeAlignmentAssignerState completeSplits(Set<String> splitIds) {
+  public synchronized EventTimeAlignmentAssignerState completeSplits(Collection<String> splitIds) {
     List<IcebergSourceSplit> completedSplitIds =
         splitIds
             .stream()
@@ -214,6 +213,14 @@ class EventTimeAlignmentAssignerState {
         .stream()
         .filter(SplitState::isAssigned)
         .collect(Collectors.toMap(SplitState::getSplit, SplitState::getSubtaskId));
+  }
+
+  public synchronized Map<IcebergSourceSplit, IcebergSourceSplitStatus> snapshotState() {
+    return splitStateMap
+        .values()
+        .stream()
+        .filter(SplitState::notCompleted)
+        .collect(Collectors.toMap(SplitState::getSplit, SplitState::getStatus));
   }
 
   public int getTotalSplits() {
@@ -409,12 +416,20 @@ class EventTimeAlignmentAssignerState {
       return status.equals(IcebergSourceSplitStatus.COMPLETED);
     }
 
+    private boolean notCompleted() {
+      return !isCompleted();
+    }
+
     public IcebergSourceSplit getSplit() {
       return split;
     }
 
     public String getSubtaskId() {
       return subtaskId;
+    }
+
+    public IcebergSourceSplitStatus getStatus() {
+      return status;
     }
   }
 
