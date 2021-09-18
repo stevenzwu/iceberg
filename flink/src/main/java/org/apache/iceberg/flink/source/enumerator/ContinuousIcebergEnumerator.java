@@ -46,9 +46,9 @@ public class ContinuousIcebergEnumerator extends AbstractIcebergEnumerator {
   public ContinuousIcebergEnumerator(
       SplitEnumeratorContext<IcebergSourceSplit> enumeratorContext,
       SplitAssigner assigner,
-      @Nullable IcebergEnumeratorState enumState,
       IcebergEnumeratorConfig enumeratorConfig,
-      ContinuousSplitPlanner splitPlanner) {
+      ContinuousSplitPlanner splitPlanner,
+      @Nullable IcebergEnumeratorState enumState) {
     super(enumeratorContext, assigner);
 
     this.enumeratorContext = enumeratorContext;
@@ -63,6 +63,7 @@ public class ContinuousIcebergEnumerator extends AbstractIcebergEnumerator {
 
   @Override
   public void start() {
+    super.start();
     enumeratorContext.callAsync(
         this::discoverSplits,
         this::processDiscoveredSplits,

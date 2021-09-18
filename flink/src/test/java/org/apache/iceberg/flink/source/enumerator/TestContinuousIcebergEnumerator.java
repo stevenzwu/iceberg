@@ -134,9 +134,9 @@ public class TestContinuousIcebergEnumerator {
         new ContinuousIcebergEnumerator(
             context,
             new SimpleSplitAssigner(Collections.emptyMap()),
-            null,
             config,
-            splitPlanner);
+            splitPlanner,
+            null);
     enumerator.start();
     return enumerator;
   }

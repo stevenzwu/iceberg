@@ -20,7 +20,6 @@
 package org.apache.iceberg.flink.source;
 
 import java.io.IOException;
-import java.util.List;
 import javax.annotation.Nullable;
 import org.apache.flink.annotation.Experimental;
 import org.apache.flink.api.connector.source.Boundedness;
@@ -129,18 +128,6 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
     final SplitAssigner assigner;
     if (enumState == null) {
       assigner = assignerFactory.createAssigner();
-      // for batch jobs, discover splits eagerly during job initialization.
-      // As FLINK-16866 supports non-blocking job submission since 1.12,
-      // heavy job initialization won't lead to request timeout for job submission.
-      if (enumeratorConfig.splitDiscoveryInterval() == null) {
-        final List<IcebergSourceSplit> splits = FlinkSplitGenerator.planIcebergSourceSplits(table, scanContext);
-        assigner.onDiscoveredSplits(splits);
-        LOG.info("Iceberg source started in batch execution mode with {} splits discovered from table {}",
-            splits.size(), table.name());
-      } else {
-        LOG.info("Iceberg source started in streaming execution mode for table {} with discovery interval at {}",
-            table.name(), enumeratorConfig.splitDiscoveryInterval());
-      }
     } else {
       LOG.info("Iceberg source restored {} splits from state for table {}",
           enumState.pendingSplits().size(), table.name());
@@ -148,15 +135,13 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
     }
 
     if (enumeratorConfig.splitDiscoveryInterval() == null) {
-      return new StaticIcebergEnumerator(enumContext, assigner);
+      return new StaticIcebergEnumerator(enumContext, assigner, table, scanContext, enumState);
     } else {
       final ContinuousSplitPlanner splitPlanner = new ContinuousSplitPlannerImpl(
           table, enumeratorConfig, scanContext);
-      return new ContinuousIcebergEnumerator(enumContext, assigner,
-          enumState, enumeratorConfig, splitPlanner);
+      return new ContinuousIcebergEnumerator(enumContext, assigner, enumeratorConfig, splitPlanner, enumState);
     }
   }
-
 
   public static <T> Builder<T> builder() {
     return new Builder<>();
