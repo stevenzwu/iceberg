@@ -26,7 +26,8 @@ import org.apache.flink.util.InstantiationUtil;
 
 /**
  * TODO: use Java serialization for now.
- * will switch to more stable serializer from issue-1698.
+ * Will switch to more stable serializer from
+ * <a href="https://github.com/apache/iceberg/issues/1698">issue-1698</a>.
  */
 public class IcebergSourceSplitSerializer implements SimpleVersionedSerializer<IcebergSourceSplit> {
   public static final IcebergSourceSplitSerializer INSTANCE = new IcebergSourceSplitSerializer();
