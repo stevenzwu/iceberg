@@ -20,7 +20,9 @@
 package org.apache.iceberg.flink;
 
 import java.io.File;
+import javax.annotation.Nullable;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.TableIdentifier;
@@ -35,16 +37,24 @@ public class HadoopTableResource extends ExternalResource {
   private final String database;
   private final String tableName;
   private final Schema schema;
+  @Nullable
+  private final PartitionSpec partitionSpec;
 
   private HadoopCatalog catalog;
   private TableLoader tableLoader;
   private Table table;
 
   public HadoopTableResource(TemporaryFolder temporaryFolder, String database, String tableName, Schema schema) {
+    this(temporaryFolder, database, tableName, schema, null);
+  }
+
+  public HadoopTableResource(TemporaryFolder temporaryFolder, String database, String tableName,
+                             Schema schema, @Nullable PartitionSpec partitionSpec) {
     this.temporaryFolder = temporaryFolder;
     this.database = database;
     this.tableName = tableName;
     this.schema = schema;
+    this.partitionSpec = partitionSpec;
   }
 
   @Override

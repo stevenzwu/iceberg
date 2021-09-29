@@ -44,16 +44,17 @@ import org.apache.flink.test.util.MiniClusterWithClientResource;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.iceberg.FileFormat;
+import org.apache.iceberg.Schema;
 import org.apache.iceberg.data.GenericAppenderHelper;
 import org.apache.iceberg.data.RandomGenericData;
 import org.apache.iceberg.data.Record;
 import org.apache.iceberg.flink.FlinkConfigOptions;
-import org.apache.iceberg.flink.FlinkSchemaUtil;
 import org.apache.iceberg.flink.HadoopTableResource;
 import org.apache.iceberg.flink.TestFixtures;
 import org.apache.iceberg.flink.TestHelpers;
 import org.apache.iceberg.flink.data.RowDataToRowMapper;
 import org.apache.iceberg.flink.source.assigner.SimpleSplitAssignerFactory;
+import org.apache.iceberg.flink.source.assigner.SplitAssignerFactory;
 import org.apache.iceberg.flink.source.enumerator.IcebergEnumeratorConfig;
 import org.apache.iceberg.flink.source.reader.RowDataReaderFunction;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
@@ -69,6 +70,12 @@ public class TestIcebergSourceFailover {
   @ClassRule
   public static final TemporaryFolder TEMPORARY_FOLDER = new TemporaryFolder();
 
+  private final ScanContext scanContext;
+
+  public TestIcebergSourceFailover() {
+    this.scanContext = scanContext();
+  }
+
   @Rule
   public final MiniClusterWithClientResource miniClusterResource =
       new MiniClusterWithClientResource(
@@ -80,12 +87,34 @@ public class TestIcebergSourceFailover {
               .build());
 
   @Rule
-  public final HadoopTableResource tableResource = new HadoopTableResource(TEMPORARY_FOLDER,
-      TestFixtures.DATABASE, TestFixtures.TABLE, TestFixtures.SCHEMA);
+  public final HadoopTableResource tableResource = hadoopTableResource();
 
-  private final ScanContext scanContext = ScanContext.builder()
-      .project(TestFixtures.SCHEMA)
-      .build();
+  protected ScanContext scanContext() {
+    return ScanContext.builder()
+        .project(TestFixtures.SCHEMA)
+        .build();
+  }
+
+  protected HadoopTableResource hadoopTableResource() {
+    return new HadoopTableResource(TEMPORARY_FOLDER,
+        TestFixtures.DATABASE, TestFixtures.TABLE, TestFixtures.SCHEMA);
+  }
+
+  protected Schema schema() {
+    return TestFixtures.SCHEMA;
+  }
+
+  protected RowType rowType() {
+    return TestFixtures.ROW_TYPE;
+  }
+
+  protected List<Record> generateRecords(int numRecords, long seed) {
+    return RandomGenericData.generate(schema(), numRecords, seed);
+  }
+
+  protected SplitAssignerFactory assignerFactory() {
+    return new SimpleSplitAssignerFactory();
+  }
 
   @Test
   public void testBoundedWithTaskManagerFailover() throws Exception {
@@ -102,7 +131,7 @@ public class TestIcebergSourceFailover {
     final GenericAppenderHelper dataAppender = new GenericAppenderHelper(
         tableResource.table(), FileFormat.PARQUET, TEMPORARY_FOLDER);
     for (int i = 0; i < 4; ++i) {
-      List<Record> records = RandomGenericData.generate(TestFixtures.SCHEMA, 2, i);
+      List<Record> records = generateRecords(2, i);
       expectedRecords.addAll(records);
       dataAppender.appendToTable(records);
     }
@@ -112,19 +141,18 @@ public class TestIcebergSourceFailover {
     env.setRestartStrategy(RestartStrategies.fixedDelayRestart(1, 0));
     final Configuration config = new Configuration();
     config.setInteger(FlinkConfigOptions.SOURCE_READER_FETCH_BATCH_SIZE, 128);
-    final RowType rowType = FlinkSchemaUtil.convert(scanContext.project());
 
     final DataStream<Row> stream = env.fromSource(
         IcebergSource.<RowData>builder()
             .tableLoader(tableResource.tableLoader())
-            .assignerFactory(new SimpleSplitAssignerFactory())
-            .readerFunction(new RowDataReaderFunction(config, tableResource.table(), scanContext, rowType))
+            .assignerFactory(assignerFactory())
+            .readerFunction(new RowDataReaderFunction(config, tableResource.table(), scanContext, rowType()))
             .scanContext(scanContext)
             .build(),
         WatermarkStrategy.noWatermarks(),
         "IcebergSource",
         TypeInformation.of(RowData.class))
-        .map(new RowDataToRowMapper(rowType));
+        .map(new RowDataToRowMapper(rowType()));
 
     final DataStream<Row> streamFailingInTheMiddleOfReading =
         RecordCounterToFail.wrapWithFailureAfter(stream, expectedRecords.size() / 2);
@@ -143,7 +171,7 @@ public class TestIcebergSourceFailover {
 
     try (CloseableIterator<Row> iter = client.iterator) {
       final List<Row> actualRows = Lists.newArrayList(iter);
-      TestHelpers.assertRecords(actualRows, expectedRecords, TestFixtures.SCHEMA);
+      TestHelpers.assertRecords(actualRows, expectedRecords, schema());
     }
   }
 
@@ -162,7 +190,7 @@ public class TestIcebergSourceFailover {
         tableResource.table(), FileFormat.PARQUET, TEMPORARY_FOLDER);
     final List<Record> expectedRecords = Lists.newArrayList();
 
-    final List<Record> batch = RandomGenericData.generate(TestFixtures.SCHEMA, 2, 0);
+    final List<Record> batch = generateRecords(2, 0);
     expectedRecords.addAll(batch);
     dataAppender.appendToTable(batch);
 
@@ -171,13 +199,12 @@ public class TestIcebergSourceFailover {
     env.enableCheckpointing(10L);
     final Configuration config = new Configuration();
     config.setInteger(FlinkConfigOptions.SOURCE_READER_FETCH_BATCH_SIZE, 128);
-    final RowType rowType = FlinkSchemaUtil.convert(scanContext.project());
 
     final DataStream<Row> stream = env.fromSource(
         IcebergSource.<RowData>builder()
             .tableLoader(tableResource.tableLoader())
-            .assignerFactory(new SimpleSplitAssignerFactory())
-            .readerFunction(new RowDataReaderFunction(config, tableResource.table(), scanContext, rowType))
+            .assignerFactory(assignerFactory())
+            .readerFunction(new RowDataReaderFunction(config, tableResource.table(), scanContext, rowType()))
             .scanContext(scanContext)
             .enumeratorConfig(IcebergEnumeratorConfig.builder()
                 .splitDiscoveryInterval(Duration.ofMillis(10))
@@ -187,7 +214,7 @@ public class TestIcebergSourceFailover {
         WatermarkStrategy.noWatermarks(),
         "IcebergSource",
         TypeInformation.of(RowData.class))
-        .map(new RowDataToRowMapper(rowType));
+        .map(new RowDataToRowMapper(rowType()));
 
     final ClientAndIterator<Row> client =
         DataStreamUtils.collectWithClient(
@@ -197,12 +224,12 @@ public class TestIcebergSourceFailover {
     final List<Row> actualRows = Lists.newArrayList();
     final CloseableIterator<Row> closeableIterator = client.iterator;
     actualRows.addAll(TestIcebergSourceContinuous.waitForResult(closeableIterator, 2));
-    TestHelpers.assertRecords(actualRows, expectedRecords, TestFixtures.SCHEMA);
+    TestHelpers.assertRecords(actualRows, expectedRecords, schema());
 
     try (CloseableIterator<Row> iter = closeableIterator) {
       for (int i = 1; i < 5; i++) {
         Thread.sleep(10);
-        List<Record> records = RandomGenericData.generate(TestFixtures.SCHEMA, 2, i);
+        List<Record> records = generateRecords(2, i);
         expectedRecords.addAll(records);
         dataAppender.appendToTable(records);
         if (i == 2) {
@@ -212,7 +239,7 @@ public class TestIcebergSourceFailover {
       }
       actualRows.addAll(TestIcebergSourceContinuous.waitForResult(iter, 8));
     }
-    TestHelpers.assertRecords(actualRows, expectedRecords, TestFixtures.SCHEMA);
+    TestHelpers.assertRecords(actualRows, expectedRecords, schema());
   }
 
   // ------------------------------------------------------------------------

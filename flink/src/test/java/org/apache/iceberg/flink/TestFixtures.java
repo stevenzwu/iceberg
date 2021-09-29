@@ -49,4 +49,14 @@ public class TestFixtures {
   public static final String TABLE = "t";
 
   public static final TableIdentifier TABLE_IDENTIFIER = TableIdentifier.of(DATABASE, TABLE);
+
+  public static final Schema TS_SCHEMA = new Schema(
+      required(1, "ts", Types.TimestampType.withoutZone()),
+      required(2, "str", Types.StringType.get()));
+
+  public static final PartitionSpec TS_SPEC = PartitionSpec.builderFor(TS_SCHEMA)
+      .hour("ts")
+      .build();
+
+  public static final RowType TS_ROW_TYPE = FlinkSchemaUtil.convert(TS_SCHEMA);
 }
