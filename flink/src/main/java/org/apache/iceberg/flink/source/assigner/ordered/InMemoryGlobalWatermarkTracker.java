@@ -80,7 +80,6 @@ class InMemoryGlobalWatermarkTracker<PartitionT> implements GlobalWatermarkTrack
       listeners
           .entrySet()
           .stream()
-          .filter(entry -> !entry.getKey().equals(updatedPartitionT))
           .forEach(
               entry -> {
                 entry.getValue().keySet().forEach(listener -> listener.onWatermarkChange(v2));
