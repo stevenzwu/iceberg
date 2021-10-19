@@ -81,7 +81,7 @@ public class ContinuousIcebergEnumerator extends AbstractIcebergEnumerator {
     return new IcebergEnumeratorState(enumeratorPosition.get(), assigner.state());
   }
 
-  private ContinuousEnumerationResult discoverSplits() {
+  private EnumerationResult discoverSplits() {
 //    final IcebergEnumeratorPosition lastPosition = enumeratorPosition.get();
     return splitPlanner.planSplits(enumeratorPosition.get());
   }
@@ -92,7 +92,7 @@ public class ContinuousIcebergEnumerator extends AbstractIcebergEnumerator {
    * pool is busy and multiple discovery actions are executed concurrently. In this case, we need to ignore the later
    * completed discoveries. Otherwise, we can add duplicate splits to the assigner.
    */
-  private void processDiscoveredSplits(ContinuousEnumerationResult result, Throwable error) {
+  private void processDiscoveredSplits(EnumerationResult result, Throwable error) {
     if (error == null) {
       if (!result.splits().isEmpty()) {
         if (enumeratorPosition.get() != null &&

@@ -32,6 +32,7 @@ import org.apache.iceberg.relocated.com.google.common.base.Objects;
 import org.apache.iceberg.relocated.com.google.common.collect.Iterables;
 
 public class IcebergSourceSplit implements SourceSplit, Serializable {
+  private final String fullTableName;
   private final CombinedScanTask task;
   /**
    * Position field is mutable
@@ -46,18 +47,23 @@ public class IcebergSourceSplit implements SourceSplit, Serializable {
   @Nullable
   private transient byte[] serializedFormCache;
 
-  public IcebergSourceSplit(CombinedScanTask task, Position position) {
+  public IcebergSourceSplit(String fullTableName, CombinedScanTask task, Position position) {
+    this.fullTableName = fullTableName;
     this.task = task;
     this.position = position;
   }
 
-  public static IcebergSourceSplit fromCombinedScanTask(CombinedScanTask combinedScanTask) {
-    return fromCombinedScanTask(combinedScanTask, 0L, 0L);
+  public static IcebergSourceSplit fromCombinedScanTask(String fullTableName, CombinedScanTask combinedScanTask) {
+    return fromCombinedScanTask(fullTableName, combinedScanTask, 0L, 0L);
   }
 
-  public static IcebergSourceSplit fromCombinedScanTask(
+  public static IcebergSourceSplit fromCombinedScanTask(String fullTableName,
       CombinedScanTask combinedScanTask, long fileOffset, long recordOffset) {
     return new IcebergSourceSplit(combinedScanTask, new Position(fileOffset, recordOffset));
+  }
+
+  public String fullTableName() {
+    return fullTableName;
   }
 
   public CombinedScanTask task() {

@@ -68,7 +68,7 @@ public class ContinuousSplitPlannerImpl implements ContinuousSplitPlanner {
   }
 
   @Override
-  public ContinuousEnumerationResult planSplits(IcebergEnumeratorPosition lastPosition) {
+  public EnumerationResult planSplits(IcebergEnumeratorPosition lastPosition) {
 
     table.refresh();
     if (lastPosition != null) {
@@ -77,7 +77,7 @@ public class ContinuousSplitPlannerImpl implements ContinuousSplitPlanner {
       final List<IcebergSourceSplit> splits;
       if (currentSnapshot.snapshotId() == lastPosition.endSnapshotId()) {
         LOG.info("Current table snapshot is already enumerated: {}", currentSnapshot.snapshotId());
-        return new ContinuousEnumerationResult(Collections.emptyList(), lastPosition);
+        return new EnumerationResult(Collections.emptyList(), lastPosition);
       } else {
         final ScanContext incrementalScan = scanContext
             .copyWithAppendsBetween(lastPosition.endSnapshotId(), currentSnapshot.snapshotId());
@@ -91,7 +91,7 @@ public class ContinuousSplitPlannerImpl implements ContinuousSplitPlanner {
             .endSnapshotTimestampMs(currentSnapshot.timestampMillis())
             .build();
         LOG.info("Discovered {} splits from incremental scan: {}", splits.size(), position);
-        return new ContinuousEnumerationResult(splits, position);
+        return new EnumerationResult(splits, position);
       }
     } else {
       // first time
@@ -113,7 +113,7 @@ public class ContinuousSplitPlannerImpl implements ContinuousSplitPlanner {
           .endSnapshotId(startSnapshotEntry.snapshotId())
           .endSnapshotTimestampMs(startSnapshotEntry.timestampMillis())
           .build();
-      return new ContinuousEnumerationResult(splits, position);
+      return new EnumerationResult(splits, position);
     }
   }
 

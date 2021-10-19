@@ -29,8 +29,8 @@ class TestContinuousSplitPlanner implements ContinuousSplitPlanner {
   private final ArrayDeque<IcebergSourceSplit> splits = new ArrayDeque<>();
 
   @Override
-  public synchronized ContinuousEnumerationResult planSplits(IcebergEnumeratorPosition lastPosition) {
-    ContinuousEnumerationResult result = new ContinuousEnumerationResult(
+  public synchronized EnumerationResult planSplits(IcebergEnumeratorPosition lastPosition) {
+    EnumerationResult result = new EnumerationResult(
         new ArrayList<>(splits), lastPosition);
     return result;
   }

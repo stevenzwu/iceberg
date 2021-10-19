@@ -76,7 +76,7 @@ public class TestContinuousSplitPlannerImpl {
     final ContinuousSplitPlannerImpl splitPlanner = new ContinuousSplitPlannerImpl(
         tableResource.table(), config, scanContext);
 
-    ContinuousEnumerationResult result1 = splitPlanner.planSplits(null);
+    EnumerationResult result1 = splitPlanner.planSplits(null);
     Assert.assertEquals(snapshot1.snapshotId(), result1.position().endSnapshotId());
     Assert.assertEquals(1, result1.splits().size());
     final IcebergSourceSplit split1 = result1.splits().iterator().next();
@@ -99,7 +99,7 @@ public class TestContinuousSplitPlannerImpl {
     dataAppender.appendToTable(dataFile);
     final Snapshot snapshot = tableResource.table().currentSnapshot();
 
-    ContinuousEnumerationResult result = splitPlanner.planSplits(lastPosition);
+    EnumerationResult result = splitPlanner.planSplits(lastPosition);
     Assert.assertEquals(snapshot.snapshotId(), result.position().endSnapshotId());
     Assert.assertEquals(1, result.splits().size());
     final IcebergSourceSplit split = result.splits().iterator().next();
