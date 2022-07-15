@@ -50,11 +50,6 @@ public class TestFlinkInputFormat extends TestFlinkSource {
   }
 
   @Override
-  public void before() throws IOException {
-    super.before();
-  }
-
-  @Override
   protected List<Row> run(
       FlinkSource.Builder formatBuilder, Map<String, String> sqlOptions, String sqlFilter, String... sqlSelectedFields)
       throws Exception {
@@ -71,7 +66,7 @@ public class TestFlinkInputFormat extends TestFlinkSource {
             Types.NestedField.required(5, "f3", Types.LongType.get()))),
         required(6, "id", Types.LongType.get()));
 
-    Table table = catalog.createTable(TableIdentifier.of("default", "t"), schema);
+    Table table = catalogResource.catalog().createTable(TableIdentifier.of("default", "t"), schema);
 
     List<Record> writeRecords = RandomGenericData.generate(schema, 2, 0L);
     new GenericAppenderHelper(table, fileFormat, TEMPORARY_FOLDER).appendToTable(writeRecords);
@@ -106,7 +101,7 @@ public class TestFlinkInputFormat extends TestFlinkSource {
         Types.NestedField.optional(2, "time", Types.TimestampType.withZone())
     );
 
-    Table table = catalog.createTable(TableIdentifier.of("default", "t"), writeSchema);
+    Table table = catalogResource.catalog().createTable(TableIdentifier.of("default", "t"), writeSchema);
 
     List<Record> writeRecords = RandomGenericData.generate(writeSchema, 2, 0L);
     new GenericAppenderHelper(table, fileFormat, TEMPORARY_FOLDER).appendToTable(writeRecords);
