@@ -24,6 +24,8 @@ import java.util.concurrent.TimeUnit;
 import org.assertj.core.api.Assertions;
 import org.junit.Test;
 
+import static org.assertj.core.api.Assertions.withinPercentage;
+
 public class TestDefaultMetricsContext {
 
   @Test
@@ -78,5 +80,45 @@ public class TestDefaultMetricsContext {
     Timer timer = metricsContext.timer("test", TimeUnit.MICROSECONDS);
     timer.record(10, TimeUnit.MINUTES);
     Assertions.assertThat(timer.totalDuration()).isEqualTo(Duration.ofMinutes(10L));
+  }
+
+  @Test
+  public void intGauge() {
+    MetricsContext metricsContext = new DefaultMetricsContext();
+    Gauge<Integer> gauge = metricsContext.gauge("test", Integer.class);
+    gauge.set(1);
+    Assertions.assertThat(gauge.get()).isEqualTo(1);
+  }
+
+  @Test
+  public void longGauge() {
+    MetricsContext metricsContext = new DefaultMetricsContext();
+    Gauge<Long> gauge = metricsContext.gauge("test", Long.class);
+    gauge.set(1L);
+    Assertions.assertThat(gauge.get()).isEqualTo(1L);
+  }
+
+  @Test
+  public void histogram() {
+    MetricsContext metricsContext = new DefaultMetricsContext();
+    int reservoirSize = 128;
+    Histogram histogram = metricsContext.histogram("test", reservoirSize);
+    for (int i = 0; i < reservoirSize; ++i) {
+      histogram.update(i);
+    }
+
+    Assertions.assertThat(histogram.count()).isEqualTo(reservoirSize);
+    Histogram.Statistics statistics = histogram.statistics();
+    Assertions.assertThat(statistics.size()).isEqualTo(reservoirSize);
+    Assertions.assertThat(statistics.mean()).isEqualTo(63.5);
+    Assertions.assertThat(statistics.stdDev()).isCloseTo(36.95, withinPercentage(0.1));
+    Assertions.assertThat(statistics.max()).isEqualTo(127L);
+    Assertions.assertThat(statistics.min()).isEqualTo(0L);
+    Assertions.assertThat(statistics.percentile(0.50)).isEqualTo(63);
+    Assertions.assertThat(statistics.percentile(0.75)).isEqualTo(95);
+    Assertions.assertThat(statistics.percentile(0.90)).isEqualTo(114.2);
+    Assertions.assertThat(statistics.percentile(0.95)).isEqualTo(120.6);
+    Assertions.assertThat(statistics.percentile(0.99)).isEqualTo(125.72);
+    Assertions.assertThat(statistics.percentile(0.999)).isEqualTo(126.872);
   }
 }
