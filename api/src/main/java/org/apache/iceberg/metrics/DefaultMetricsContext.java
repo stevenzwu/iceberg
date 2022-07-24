@@ -40,4 +40,21 @@ public class DefaultMetricsContext implements MetricsContext {
   public Timer timer(String name, TimeUnit unit) {
     return new DefaultTimer(unit);
   }
+
+  @Override
+  public <T extends Number> Gauge<T> gauge(String name, Class<T> type) {
+    if (Integer.class.equals(type)) {
+      return (Gauge<T>) new IntGauge();
+    }
+
+    if (Long.class.equals(type)) {
+      return (Gauge<T>) new LongGauge();
+    }
+    throw new IllegalArgumentException(String.format("Counter for type %s is not supported", type.getName()));
+  }
+
+  @Override
+  public Histogram histogram(String name, int reservoirSize) {
+    return new DefaultHistogram(reservoirSize);
+  }
 }

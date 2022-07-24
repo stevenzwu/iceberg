@@ -106,6 +106,14 @@ public interface MetricsContext extends Serializable {
     throw new UnsupportedOperationException("Timer is not supported.");
   }
 
+  default <T extends Number> Gauge<T> gauge(String name, Class<T> type) {
+    throw new UnsupportedOperationException("Gauge is not supported.");
+  }
+
+  default Histogram histogram(String name, int reservoirSize) {
+    throw new UnsupportedOperationException("Histogram is not supported.");
+  }
+
   /**
    * Utility method for producing no metrics.
    *
