@@ -105,24 +105,24 @@ public class TestDefaultMetricsContext {
   @Test
   public void histogram() {
     MetricsContext metricsContext = new DefaultMetricsContext();
-    int reservoirSize = 128;
+    int reservoirSize = 100;
     Histogram histogram = metricsContext.histogram("test", reservoirSize);
-    for (int i = 0; i < reservoirSize; ++i) {
+    for (int i = 1; i <= reservoirSize; ++i) {
       histogram.update(i);
     }
 
     Assertions.assertThat(histogram.count()).isEqualTo(reservoirSize);
     Histogram.Statistics statistics = histogram.statistics();
     Assertions.assertThat(statistics.size()).isEqualTo(reservoirSize);
-    Assertions.assertThat(statistics.mean()).isEqualTo(63.5);
-    Assertions.assertThat(statistics.stdDev()).isCloseTo(36.95, withinPercentage(0.1));
-    Assertions.assertThat(statistics.max()).isEqualTo(127L);
-    Assertions.assertThat(statistics.min()).isEqualTo(0L);
-    Assertions.assertThat(statistics.percentile(0.50)).isEqualTo(63);
-    Assertions.assertThat(statistics.percentile(0.75)).isEqualTo(95);
-    Assertions.assertThat(statistics.percentile(0.90)).isEqualTo(114.2);
-    Assertions.assertThat(statistics.percentile(0.95)).isEqualTo(120.6);
-    Assertions.assertThat(statistics.percentile(0.99)).isEqualTo(125.72);
-    Assertions.assertThat(statistics.percentile(0.999)).isEqualTo(126.872);
+    Assertions.assertThat(statistics.mean()).isEqualTo(50.5);
+    Assertions.assertThat(statistics.stdDev()).isCloseTo(28.866, withinPercentage(0.001));
+    Assertions.assertThat(statistics.max()).isEqualTo(100L);
+    Assertions.assertThat(statistics.min()).isEqualTo(1L);
+    Assertions.assertThat(statistics.percentile(0.50)).isEqualTo(50);
+    Assertions.assertThat(statistics.percentile(0.75)).isEqualTo(75);
+    Assertions.assertThat(statistics.percentile(0.90)).isEqualTo(90);
+    Assertions.assertThat(statistics.percentile(0.95)).isEqualTo(95);
+    Assertions.assertThat(statistics.percentile(0.99)).isEqualTo(99);
+    Assertions.assertThat(statistics.percentile(0.999)).isEqualTo(99.9);
   }
 }

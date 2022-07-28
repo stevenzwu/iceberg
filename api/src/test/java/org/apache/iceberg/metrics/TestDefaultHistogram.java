@@ -18,6 +18,15 @@
  */
 package org.apache.iceberg.metrics;
 
+import static java.util.concurrent.Executors.newFixedThreadPool;
+import static java.util.concurrent.TimeUnit.SECONDS;
+
+import java.util.List;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import org.assertj.core.api.Assertions;
 import org.junit.Test;
 
@@ -81,5 +90,57 @@ public class TestDefaultHistogram {
     Assertions.assertThatThrownBy(() -> statistics.percentile(1.1))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("Percentile point cannot be outside the range of [0.0 - 1.10]: " + 1.1);
+  }
+
+  @Test
+  public void testMultipleThreadWriters() throws InterruptedException {
+    DefaultHistogram histogram = new DefaultHistogram(128);
+
+    int threads = 10;
+    CyclicBarrier barrier = new CyclicBarrier(threads);
+    ExecutorService executor = newFixedThreadPool(threads);
+
+    List<Future<Integer>> futures =
+        IntStream.range(1, threads + 1)
+            .mapToObj(
+                threadIndex ->
+                    executor.submit(
+                        () -> {
+                          try {
+                            barrier.await(30, SECONDS);
+                            histogram.update(threadIndex);
+                            return threadIndex;
+                          } catch (Exception e) {
+                            throw new RuntimeException(e);
+                          }
+                        }))
+            .collect(Collectors.toList());
+
+    futures.stream()
+        .map(
+            f -> {
+              try {
+                return f.get(30, SECONDS);
+              } catch (Exception e) {
+                throw new RuntimeException(e);
+              }
+            })
+        .forEach(d -> System.out.println("d = " + d));
+
+    executor.shutdownNow();
+    executor.awaitTermination(5, SECONDS);
+    Histogram.Statistics statistics = histogram.statistics();
+
+    Assertions.assertThat(histogram.count()).isEqualTo(threads);
+    Assertions.assertThat(statistics.size()).isEqualTo(threads);
+    Assertions.assertThat(statistics.mean()).isEqualTo(5.5);
+    Assertions.assertThat(statistics.max()).isEqualTo(10L);
+    Assertions.assertThat(statistics.min()).isEqualTo(1L);
+    Assertions.assertThat(statistics.percentile(0.50)).isEqualTo(5);
+    Assertions.assertThat(statistics.percentile(0.75)).isEqualTo(7.5);
+    Assertions.assertThat(statistics.percentile(0.90)).isEqualTo(9);
+    Assertions.assertThat(statistics.percentile(0.95)).isEqualTo(9.5);
+    Assertions.assertThat(statistics.percentile(0.99)).isEqualTo(9.9);
+    Assertions.assertThat(statistics.percentile(0.999)).isEqualTo(9.99);
   }
 }
