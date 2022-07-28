@@ -16,14 +16,11 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-
 package org.apache.iceberg.metrics;
 
 import java.util.concurrent.atomic.AtomicLong;
 
-/**
- * A default {@link Gauge} implementation that tracks {@link Long} type value
- */
+/** A default {@link Gauge} implementation that tracks {@link Long} type value */
 public class LongGauge implements Gauge<Long> {
   private final AtomicLong value = new AtomicLong();
 

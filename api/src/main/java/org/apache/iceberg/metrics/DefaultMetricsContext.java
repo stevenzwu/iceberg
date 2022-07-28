@@ -50,7 +50,8 @@ public class DefaultMetricsContext implements MetricsContext {
     if (Long.class.equals(type)) {
       return (Gauge<T>) new LongGauge();
     }
-    throw new IllegalArgumentException(String.format("Gauge for type %s is not supported", type.getName()));
+    throw new IllegalArgumentException(
+        String.format("Gauge for type %s is not supported", type.getName()));
   }
 
   @Override

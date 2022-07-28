@@ -18,12 +18,12 @@
  */
 package org.apache.iceberg.metrics;
 
+import static org.assertj.core.api.Assertions.withinPercentage;
+
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 import org.assertj.core.api.Assertions;
 import org.junit.Test;
-
-import static org.assertj.core.api.Assertions.withinPercentage;
 
 public class TestDefaultMetricsContext {
 

@@ -16,12 +16,9 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-
 package org.apache.iceberg.metrics;
 
-/**
- * Gauge metric tracks the latest value.
- */
+/** Gauge metric tracks the latest value. */
 public interface Gauge<T extends Number> {
 
   void set(T value);

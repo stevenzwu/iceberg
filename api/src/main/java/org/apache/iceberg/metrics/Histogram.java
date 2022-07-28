@@ -16,61 +16,44 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-
 package org.apache.iceberg.metrics;
 
 public interface Histogram {
-  /**
-   * Update the histogram with a new value observed.
-   */
+  /** Update the histogram with a new value observed. */
   void update(long value);
 
-  /**
-   * Return the number of observations.
-   */
+  /** Return the number of observations. */
   long count();
 
-  /**
-   * Calculate the statistics of the observed values.
-   */
+  /** Calculate the statistics of the observed values. */
   Statistics statistics();
 
   interface Statistics {
     /**
      * Return the number of values that the statistics computation is based on.
-     * <p>
-     * If the number of sampling is less than the reservoir size,
-     * the sampling count should be returned.
-     * Otherwise, the reservoir size is returned.
+     *
+     * <p>If the number of sampling is less than the reservoir size, the sampling count should be
+     * returned. Otherwise, the reservoir size is returned.
      */
     long size();
 
-    /**
-     * Returns the mean value of the histogram observations.
-     */
+    /** Returns the mean value of the histogram observations. */
     double mean();
 
-    /**
-     * Returns the standard deviation of the histogram distribution.
-     */
+    /** Returns the standard deviation of the histogram distribution. */
     double stdDev();
 
-    /**
-     * Returns the maximum value of the histogram observations.
-     */
+    /** Returns the maximum value of the histogram observations. */
     long max();
 
-    /**
-     * Returns the minimum value of the histogram observations.
-     */
+    /** Returns the minimum value of the histogram observations. */
     long min();
 
     /**
      * Returns the percentile value based on the histogram statistics.
      *
-     * @param percentile percentile point in double. E.g., 0.75 means 75 percentile.
-     *                   It is up to the implementation to decide what
-     *                   valid percentile points are supported.
+     * @param percentile percentile point in double. E.g., 0.75 means 75 percentile. It is up to the
+     *     implementation to decide what valid percentile points are supported.
      * @return Value for the given percentile
      */
     double percentile(double percentile);

@@ -16,15 +16,14 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-
 package org.apache.iceberg.metrics;
 
 import java.util.Arrays;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 
 /**
- * A default {@link Histogram} implementation that uses a fixed size reservoir
- * like circular buffer. Oldest observation is replaced by latest observation.
+ * A default {@link Histogram} implementation that uses a fixed size reservoir like circular buffer.
+ * Oldest observation is replaced by latest observation.
  */
 public class DefaultHistogram implements Histogram {
   private final long[] measurements;
@@ -122,8 +121,10 @@ public class DefaultHistogram implements Histogram {
 
     @Override
     public double percentile(double percentile) {
-      Preconditions.checkArgument(!Double.isNaN(percentile) && percentile >= 0.0 && percentile <= 1.0,
-          "Percentile point cannot be outside the range of [0.0 - 1.10]: %s", percentile);
+      Preconditions.checkArgument(
+          !Double.isNaN(percentile) && percentile >= 0.0 && percentile <= 1.0,
+          "Percentile point cannot be outside the range of [0.0 - 1.10]: %s",
+          percentile);
       if (values.length == 0) {
         return 0.0;
       } else {
