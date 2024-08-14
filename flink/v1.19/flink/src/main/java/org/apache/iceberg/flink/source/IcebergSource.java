@@ -233,11 +233,11 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
     }
   }
 
-  boolean shouldInferParallelism() {
+  private boolean shouldInferParallelism() {
     return !scanContext.isStreaming();
   }
 
-  int inferParallelism(ReadableConfig flinkConf, StreamExecutionEnvironment env) {
+  private int inferParallelism(ReadableConfig flinkConf, StreamExecutionEnvironment env) {
     int parallelism =
         SourceUtil.inferParallelism(
             flinkConf,

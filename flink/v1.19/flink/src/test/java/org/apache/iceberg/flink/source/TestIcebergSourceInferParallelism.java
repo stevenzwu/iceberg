@@ -100,8 +100,8 @@ public class TestIcebergSourceInferParallelism {
   public void testTableWithFilesLessThanMaxInferredParallelism() throws Exception {
     // Append files to the table
     for (int i = 0; i < 2; ++i) {
-      List<Record> batch1 = RandomGenericData.generate(table.schema(), 1, 0);
-      dataAppender.appendToTable(batch1);
+      List<Record> batch = RandomGenericData.generate(table.schema(), 1, 0);
+      dataAppender.appendToTable(batch);
     }
 
     // Inferred parallelism should equal to 2 splits
@@ -112,8 +112,8 @@ public class TestIcebergSourceInferParallelism {
   public void testTableWithFilesMoreThanMaxInferredParallelism() throws Exception {
     // Append files to the table
     for (int i = 0; i < MAX_INFERRED_PARALLELISM + 1; ++i) {
-      List<Record> batch1 = RandomGenericData.generate(table.schema(), 1, 0);
-      dataAppender.appendToTable(batch1);
+      List<Record> batch = RandomGenericData.generate(table.schema(), 1, 0);
+      dataAppender.appendToTable(batch);
     }
 
     // Inferred parallelism should be capped by the MAX_INFERRED_PARALLELISM

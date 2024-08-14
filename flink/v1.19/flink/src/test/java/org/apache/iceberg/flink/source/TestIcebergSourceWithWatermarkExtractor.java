@@ -59,7 +59,6 @@ import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.data.GenericAppenderHelper;
 import org.apache.iceberg.data.GenericRecord;
 import org.apache.iceberg.data.Record;
-import org.apache.iceberg.flink.FlinkConfigOptions;
 import org.apache.iceberg.flink.HadoopTableExtension;
 import org.apache.iceberg.flink.TestFixtures;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
@@ -83,9 +82,7 @@ public class TestIcebergSourceWithWatermarkExtractor implements Serializable {
   public static final Configuration DISABLE_CLASSLOADER_CHECK_CONFIG =
       new Configuration()
           // disable classloader check as Avro may cache class/object in the serializers.
-          .set(CoreOptions.CHECK_LEAKED_CLASSLOADER, false)
-          // disable inferring source parallelism
-          .set(FlinkConfigOptions.TABLE_EXEC_ICEBERG_INFER_SOURCE_PARALLELISM, false);
+          .set(CoreOptions.CHECK_LEAKED_CLASSLOADER, false);
 
   @RegisterExtension
   public static final MiniClusterExtension MINI_CLUSTER_EXTENSION =
