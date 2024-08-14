@@ -72,7 +72,10 @@ import org.apache.iceberg.flink.source.reader.ColumnStatsWatermarkExtractor;
 import org.apache.iceberg.flink.source.reader.IcebergSourceReader;
 import org.apache.iceberg.flink.source.reader.IcebergSourceReaderMetrics;
 import org.apache.iceberg.flink.source.reader.MetaDataReaderFunction;
+import org.apache.iceberg.flink.source.reader.Reader;
 import org.apache.iceberg.flink.source.reader.ReaderFunction;
+import org.apache.iceberg.flink.source.reader.ReaderFunctionAdaptor;
+import org.apache.iceberg.flink.source.reader.RowDataReader;
 import org.apache.iceberg.flink.source.reader.RowDataReaderFunction;
 import org.apache.iceberg.flink.source.reader.SerializableRecordEmitter;
 import org.apache.iceberg.flink.source.reader.SplitWatermarkExtractor;
@@ -268,6 +271,7 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
     private SplitAssignerFactory splitAssignerFactory;
     private SerializableComparator<IcebergSourceSplit> splitComparator;
     private ReaderFunction<T> readerFunction;
+    private Reader<T> reader;
     private TypeInformation<T> outputTypeInfo;
     private ReadableConfig flinkConfig = new Configuration();
     private final ScanContext.Builder contextBuilder = ScanContext.builder();
@@ -275,6 +279,7 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
     private Boolean exposeLocality;
     private WatermarkStrategy<T> watermarkStrategy = WatermarkStrategy.noWatermarks();
     private ScanContext context;
+    private SerializableRecordEmitter<T> emitter;
 
     private final Map<String, String> readOptions = Maps.newHashMap();
 
@@ -301,17 +306,32 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
       return this;
     }
 
+    /**
+     * @deprecated since 1.7.0. Will be removed in 2.0.0; use{@link Builder#reader(Reader)} instead
+     */
+    @Deprecated
     public Builder<T> readerFunction(ReaderFunction<T> newReaderFunction) {
       this.readerFunction = newReaderFunction;
       return this;
     }
 
     /**
-     * Optional. Only provide if using custom reader function different from provided {@link
-     * RowDataReaderFunction} and {@link AvroGenericRecordReaderFunction}
+     * Optional. Only needed if using {@link Builder#buildStream(StreamExecutionEnvironment)} and if
+     * custom reader function is provided (different from {@link RowDataReaderFunction} and{@link
+     * AvroGenericRecordReaderFunction}).
+     *
+     * @deprecated since 1.7.0. Will be removed in 2.0.0; use{@link Builder#reader(Reader)} instead
+     *     as {@code Reader} already captures the output type info.
      */
+    @Deprecated
     public Builder<T> outputTypeInfo(TypeInformation<T> newOutputTypeInfo) {
       this.outputTypeInfo = newOutputTypeInfo;
+      return this;
+    }
+
+    /** Optional. Default is {@link RowDataReader} */
+    public Builder<T> reader(Reader<T> newReader) {
+      this.reader = newReader;
       return this;
     }
 
@@ -535,7 +555,7 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
       return this;
     }
 
-    public IcebergSource<T> build() {
+    private void prepare() {
       if (table == null) {
         try (TableLoader loader = tableLoader) {
           loader.open();
@@ -553,7 +573,7 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
         contextBuilder.project(FlinkSchemaUtil.convert(icebergSchema, projectedFlinkSchema));
       }
 
-      SerializableRecordEmitter<T> emitter = SerializableRecordEmitter.defaultEmitter();
+      this.emitter = SerializableRecordEmitter.defaultEmitter();
       FlinkReadConf flinkReadConf = new FlinkReadConf(table, readOptions, flinkConfig);
       String watermarkColumn = flinkReadConf.watermarkColumn();
       TimeUnit watermarkTimeUnit = flinkReadConf.watermarkColumnTimeUnit();
@@ -564,22 +584,32 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
 
         SplitWatermarkExtractor watermarkExtractor =
             new ColumnStatsWatermarkExtractor(icebergSchema, watermarkColumn, watermarkTimeUnit);
-        emitter = SerializableRecordEmitter.emitterWithWatermark(watermarkExtractor);
+        this.emitter = SerializableRecordEmitter.emitterWithWatermark(watermarkExtractor);
         splitAssignerFactory =
             new OrderedSplitAssignerFactory(SplitComparators.watermark(watermarkExtractor));
       }
 
       this.context = contextBuilder.build();
       context.validate();
-      if (readerFunction == null) {
-        this.readerFunction = defaultReaderFunction(table, context, flinkConfig);
-      }
 
       if (splitAssignerFactory == null) {
         if (splitComparator == null) {
           splitAssignerFactory = new SimpleSplitAssignerFactory();
         } else {
           splitAssignerFactory = new OrderedSplitAssignerFactory(splitComparator);
+        }
+      }
+    }
+
+    public IcebergSource<T> build() {
+      prepare();
+
+      if (reader == null) {
+        if (readerFunction != null) {
+          // outputTypeInfo can be null here
+          this.reader = new ReaderFunctionAdaptor<>(readerFunction, outputTypeInfo);
+        } else {
+          this.reader = defaultReader(table, context, flinkConfig);
         }
       }
 
@@ -600,11 +630,19 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
      * @return data stream from the Iceberg source
      */
     public DataStream<T> buildStream(StreamExecutionEnvironment env) {
-      IcebergSource<T> source = build();
-      // inferOutputTypeInfo depends on the ScanContext constructed by build() call above
-      if (outputTypeInfo == null) {
-        this.outputTypeInfo = inferOutputTypeInfo(table, context, readerFunction);
+      prepare();
+
+      if (reader == null) {
+        if (readerFunction != null) {
+          Preconditions.checkState(
+              outputTypeInfo != null,
+              "cannot construct reader: output type info is null. Must set Builder#outputTypeInfo() when using deprecated Builder#readerFunction(). Alternatively, it is recommended to use the new Builder#reader().");
+          this.reader = new ReaderFunctionAdaptor<>(readerFunction, outputTypeInfo);
+        } else {
+          this.reader = defaultReader(table, context, flinkConfig);
+        }
       }
+      IcebergSource<T> source = build();
 
       DataStreamSource<T> stream =
           env.fromSource(source, watermarkStrategy, source.name(), outputTypeInfo);
@@ -617,13 +655,13 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
     }
 
     @SuppressWarnings("unchecked")
-    private static <T> ReaderFunction<T> defaultReaderFunction(
+    private static <T> Reader<T> defaultReader(
         Table table, ScanContext context, ReadableConfig flinkConfig) {
       if (table instanceof BaseMetadataTable) {
         MetaDataReaderFunction rowDataReaderFunction =
             new MetaDataReaderFunction(
                 flinkConfig, table.schema(), context.project(), table.io(), table.encryption());
-        return (ReaderFunction<T>) rowDataReaderFunction;
+        return (Reader<T>) rowDataReaderFunction;
       } else {
         RowDataReaderFunction rowDataReaderFunction =
             new RowDataReaderFunction(
@@ -636,7 +674,7 @@ public class IcebergSource<T> implements Source<T, IcebergSourceSplit, IcebergEn
                 table.encryption(),
                 context.filters(),
                 context.limit());
-        return (ReaderFunction<T>) rowDataReaderFunction;
+        return (Reader<T>) rowDataReaderFunction;
       }
     }
 

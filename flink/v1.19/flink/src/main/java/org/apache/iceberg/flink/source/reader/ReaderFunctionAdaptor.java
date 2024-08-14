@@ -18,31 +18,31 @@
  */
 package org.apache.iceberg.flink.source.reader;
 
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
-import org.apache.iceberg.flink.source.DataIterator;
 import org.apache.iceberg.flink.source.split.IcebergSourceSplit;
 import org.apache.iceberg.io.CloseableIterator;
 
-/**
- * A {@link ReaderFunction} implementation that uses {@link DataIterator}.
- *
- * @deprecated since 1.7.0. Will be removed in 2.0.0; use {@link Reader} instead
- */
-@Deprecated
-public abstract class DataIteratorReaderFunction<T> implements ReaderFunction<T> {
-  private final DataIteratorBatcher<T> batcher;
+@Internal
+public class ReaderFunctionAdaptor<T> implements Reader<T> {
+  private final ReaderFunction<T> readerFunction;
+  private final TypeInformation<T> outputTypeInfo;
 
-  public DataIteratorReaderFunction(DataIteratorBatcher<T> batcher) {
-    this.batcher = batcher;
+  public ReaderFunctionAdaptor(
+      ReaderFunction<T> readerFunction, TypeInformation<T> outputTypeInfo) {
+    this.readerFunction = readerFunction;
+    this.outputTypeInfo = outputTypeInfo;
   }
 
-  protected abstract DataIterator<T> createDataIterator(IcebergSourceSplit split);
+  @Override
+  public CloseableIterator<RecordsWithSplitIds<RecordAndPosition<T>>> open(
+      IcebergSourceSplit split) {
+    return readerFunction.apply(split);
+  }
 
   @Override
-  public CloseableIterator<RecordsWithSplitIds<RecordAndPosition<T>>> apply(
-      IcebergSourceSplit split) {
-    DataIterator<T> inputIterator = createDataIterator(split);
-    inputIterator.seek(split.fileOffset(), split.recordOffset());
-    return batcher.batch(split.splitId(), inputIterator);
+  public TypeInformation<T> outputTypeInfo() {
+    return outputTypeInfo;
   }
 }
