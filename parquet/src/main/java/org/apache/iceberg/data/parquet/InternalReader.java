@@ -20,8 +20,10 @@ package org.apache.iceberg.data.parquet;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiFunction;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.StructLike;
+import org.apache.iceberg.avro.SupportsCustomTypes;
 import org.apache.iceberg.data.Record;
 import org.apache.iceberg.parquet.ParquetValueReader;
 import org.apache.iceberg.parquet.ParquetValueReaders;
@@ -29,7 +31,7 @@ import org.apache.iceberg.types.Types.StructType;
 import org.apache.parquet.column.ColumnDescriptor;
 import org.apache.parquet.schema.MessageType;
 
-public class InternalReader<T extends StructLike> extends BaseParquetReaders<T> {
+public class InternalReader<T extends StructLike> extends BaseParquetReaders<T> implements SupportsCustomTypes {
 
   private Class<? extends StructLike> rootType = Record.class;
   private Map<Integer, Class<? extends StructLike>> typesById = new java.util.HashMap<>();
@@ -98,5 +100,11 @@ public class InternalReader<T extends StructLike> extends BaseParquetReaders<T> 
 
   public void setRootType(Class<? extends StructLike> rootClass) {
     setCustomType(ROOT_ID, rootClass);
+  }
+
+  @Override
+  public void setCustomTypes(Class<? extends StructLike> rootType, Map<Integer, Class<? extends StructLike>> typesById) {
+    this.rootType = rootType;
+    this.typesById.putAll(typesById);
   }
 }
