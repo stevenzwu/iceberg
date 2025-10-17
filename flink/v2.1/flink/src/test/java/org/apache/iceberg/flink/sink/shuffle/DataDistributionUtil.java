@@ -94,6 +94,10 @@ public class DataDistributionUtil {
     long currentWeight = startingWeight;
     for (int index = 0; index < longTailStartingIndex; ++index) {
       double jitter = ThreadLocalRandom.current().nextDouble(weightRandomJitterPercentage / 100);
+      boolean negativeJitter = ThreadLocalRandom.current().nextBoolean();
+      if (negativeJitter) {
+        jitter = -jitter;
+      }
       long weight = (long) (currentWeight * (1.0 + jitter));
       weight = weight > 0 ? weight : 1;
       weights.put(index, weight);

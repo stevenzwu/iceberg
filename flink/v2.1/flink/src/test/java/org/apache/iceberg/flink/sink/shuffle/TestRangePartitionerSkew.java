@@ -49,7 +49,7 @@ public class TestRangePartitionerSkew {
 
   // change the iterations to a larger number (like 100) to see the statistics of max skew.
   // like min, max, avg, stddev of max skew.
-  private static final int ITERATIONS = 1;
+  private static final int ITERATIONS = 100;
 
   /**
    * @param parallelism number of partitions
@@ -72,7 +72,7 @@ public class TestRangePartitionerSkew {
     SortKey sortKey = new SortKey(schema, sortOrder);
 
     NavigableMap<Integer, Long> weights =
-        DataDistributionUtil.longTailDistribution(100_000, 24, 240, 100, 2.0, 0.7);
+        DataDistributionUtil.longTailDistribution(100_000, 24, 240, 100, 10.0, 0.7);
     Map<SortKey, Long> mapStatistics =
         DataDistributionUtil.mapStatisticsWithLongTailDistribution(weights, sortKey);
     MapAssignment mapAssignment =
