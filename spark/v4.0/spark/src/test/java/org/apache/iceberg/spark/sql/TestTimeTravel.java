@@ -24,6 +24,7 @@ package org.apache.iceberg.spark.sql;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.concurrent.TimeUnit;
+import org.apache.iceberg.BaseTable;
 import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.spark.TestBaseWithCatalog;
@@ -54,6 +55,9 @@ public class TestTimeTravel extends TestBaseWithCatalog {
 
         waitUntilAfter(snapshot2.timestampMillis() + 1000);
 
+        // AS OF expects the timestamp if given in long format will be of seconds precision
+        long afterSnapshot2TimestampInSeconds = TimeUnit.MILLISECONDS.toSeconds(snapshot2.timestampMillis() + 1000);
+
         sql("INSERT INTO %s VALUES (3, 'c')", tableName);
         table.refresh();
         assertThat(table.snapshots()).hasSize(3);
@@ -62,7 +66,7 @@ public class TestTimeTravel extends TestBaseWithCatalog {
         waitUntilAfter(snapshot3.timestampMillis() + 1000);
 
         // AS OF expects the timestamp if given in long format will be of seconds precision
-        long afterSnapshot2TimestampInSeconds = TimeUnit.MILLISECONDS.toSeconds(snapshot2.timestampMillis() + 1000);
+        long afterSnapshot3TimestampInSeconds = TimeUnit.MILLISECONDS.toSeconds(snapshot3.timestampMillis() + 1000);
 
         // time travel to snapshot2
         assertThat(sql("SELECT * FROM %s TIMESTAMP AS OF %d", tableName, afterSnapshot2TimestampInSeconds))
@@ -79,6 +83,11 @@ public class TestTimeTravel extends TestBaseWithCatalog {
         // but only snapshot1 should be reachable
         assertThat(SnapshotUtil.currentAncestors(table)).containsExactly(snapshot1);
 
+        // AS OF expects the timestamp if given in long format will be of seconds precision
+        long afterRollbackTimestampInSeconds = TimeUnit.MILLISECONDS.toSeconds(((BaseTable) table).operations().current().lastUpdatedMillis() + 1000);
+
+        waitUntilAfter(afterRollbackTimestampInSeconds * 1000L);
+
         // verify data at current snapshot
         assertThat(sql("SELECT * FROM %s", tableName))
                 .hasSize(1)
@@ -89,6 +98,7 @@ public class TestTimeTravel extends TestBaseWithCatalog {
         table.refresh();
         assertThat(table.snapshots()).hasSize(4);
         Snapshot snapshot4 = table.currentSnapshot();
+        assertThat(snapshot4.timestampMillis()).isGreaterThan(afterRollbackTimestampInSeconds * 1000L);
 
         // verify data at current snapshot
         assertThat(sql("SELECT * FROM %s", tableName))
@@ -99,6 +109,16 @@ public class TestTimeTravel extends TestBaseWithCatalog {
         assertThat(sql("SELECT * FROM %s TIMESTAMP AS OF %d", tableName, afterSnapshot2TimestampInSeconds))
                 .hasSize(2)
                 .containsExactlyInAnyOrder(row(1L, "a"), row(2L, "b"));
+
+        // time travel to snapshot3
+        assertThat(sql("SELECT * FROM %s TIMESTAMP AS OF %d", tableName, afterSnapshot3TimestampInSeconds))
+                .hasSize(3)
+                .containsExactlyInAnyOrder(row(1L, "a"), row(2L, "b"), row(3L, "c"));
+
+        // time travel to after rollback timestamp
+        assertThat(sql("SELECT * FROM %s TIMESTAMP AS OF %d", tableName, afterRollbackTimestampInSeconds))
+                .hasSize(1)
+                .containsExactlyInAnyOrder(row(1L, "a"));
     }
 
 }
