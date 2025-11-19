@@ -43,6 +43,37 @@ public class TestDeleteFrom extends CatalogTestBase {
   }
 
   @TestTemplate
+  public void testNoopDelete() throws NoSuchTableException {
+    sql("CREATE TABLE %s (id bigint, data string) USING iceberg", tableName);
+
+    List<SimpleRecord> records =
+        Lists.newArrayList(
+            new SimpleRecord(1, "a"), new SimpleRecord(2, "b"), new SimpleRecord(3, "c"));
+    Dataset<Row> df = spark.createDataFrame(records, SimpleRecord.class);
+    df.coalesce(1).writeTo(tableName).append();
+
+    Table table = validationCatalog.loadTable(tableIdent);
+    assertThat(table.snapshots()).hasSize(1);
+
+    assertEquals(
+        "Should have expected rows",
+        ImmutableList.of(row(1L, "a"), row(2L, "b"), row(3L, "c")),
+        sql("SELECT * FROM %s ORDER BY id", tableName));
+
+    sql("DELETE FROM %s WHERE id > 4", tableName);
+
+    table.refresh();
+    // a dummy snapshot is created even for noop delete
+    assertThat(table.snapshots()).hasSize(2);
+    assertThat(table.currentSnapshot().operation()).isEqualTo("delete");
+
+    assertEquals(
+            "Should have expected rows",
+            ImmutableList.of(row(1L, "a"), row(2L, "b"), row(3L, "c")),
+            sql("SELECT * FROM %s ORDER BY id", tableName));
+  }
+
+  @TestTemplate
   public void testDeleteFromUnpartitionedTable() throws NoSuchTableException {
     sql("CREATE TABLE %s (id bigint, data string) USING iceberg", tableName);
 
