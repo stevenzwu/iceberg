@@ -106,25 +106,35 @@ public class MetadataColumns {
           "_last_updated_sequence_number",
           Types.LongType.get(),
           "Sequence number when the row was last updated");
+  public static final NestedField LAST_UPDATED_TIMESTAMP_MS =
+      NestedField.optional(
+          Integer.MAX_VALUE - 109,
+          "_last_updated_timestamp_ms",
+          Types.LongType.get(),
+          "Commit timestamp in milliseconds when the row was last updated");
 
   private static final Map<String, NestedField> META_COLUMNS =
-      ImmutableMap.of(
-          FILE_PATH.name(), FILE_PATH,
-          ROW_POSITION.name(), ROW_POSITION,
-          IS_DELETED.name(), IS_DELETED,
-          SPEC_ID.name(), SPEC_ID,
-          ROW_ID.name(), ROW_ID,
-          LAST_UPDATED_SEQUENCE_NUMBER.name(), LAST_UPDATED_SEQUENCE_NUMBER);
+      ImmutableMap.<String, NestedField>builder()
+          .put(FILE_PATH.name(), FILE_PATH)
+          .put(ROW_POSITION.name(), ROW_POSITION)
+          .put(IS_DELETED.name(), IS_DELETED)
+          .put(SPEC_ID.name(), SPEC_ID)
+          .put(ROW_ID.name(), ROW_ID)
+          .put(LAST_UPDATED_SEQUENCE_NUMBER.name(), LAST_UPDATED_SEQUENCE_NUMBER)
+          .put(LAST_UPDATED_TIMESTAMP_MS.name(), LAST_UPDATED_TIMESTAMP_MS)
+          .buildOrThrow();
 
   private static final Set<Integer> META_IDS =
-      ImmutableSet.of(
-          FILE_PATH.fieldId(),
-          ROW_POSITION.fieldId(),
-          IS_DELETED.fieldId(),
-          SPEC_ID.fieldId(),
-          PARTITION_COLUMN_ID,
-          ROW_ID.fieldId(),
-          LAST_UPDATED_SEQUENCE_NUMBER.fieldId());
+      ImmutableSet.<Integer>builder()
+          .add(FILE_PATH.fieldId())
+          .add(ROW_POSITION.fieldId())
+          .add(IS_DELETED.fieldId())
+          .add(SPEC_ID.fieldId())
+          .add(PARTITION_COLUMN_ID)
+          .add(ROW_ID.fieldId())
+          .add(LAST_UPDATED_SEQUENCE_NUMBER.fieldId())
+          .add(LAST_UPDATED_TIMESTAMP_MS.fieldId())
+          .build();
 
   public static Set<Integer> metadataFieldIds() {
     return META_IDS;
@@ -155,6 +165,7 @@ public class MetadataColumns {
   }
 
   public static Schema schemaWithRowLineage(Schema schema) {
-    return TypeUtil.join(schema, new Schema(ROW_ID, LAST_UPDATED_SEQUENCE_NUMBER));
+    return TypeUtil.join(
+        schema, new Schema(ROW_ID, LAST_UPDATED_SEQUENCE_NUMBER, LAST_UPDATED_TIMESTAMP_MS));
   }
 }

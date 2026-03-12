@@ -1386,6 +1386,7 @@ public class TestMetadataUpdateParser {
             snapshotId,
             parentSnapshotId,
             0,
+            0L,
             0L)) {
       writer.addAll(manifests);
     }

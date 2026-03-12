@@ -62,6 +62,7 @@ public class GenericManifestFile extends SupportsIndexProjection
   private PartitionFieldSummary[] partitions = null;
   private byte[] keyMetadata = null;
   private Long firstRowId = null;
+  private Long commitTimestampMs = null;
 
   /** Used by Avro reflection to instantiate this class when reading manifest files. */
   public GenericManifestFile(Schema avroSchema) {
@@ -94,6 +95,7 @@ public class GenericManifestFile extends SupportsIndexProjection
     this.partitions = null;
     this.keyMetadata = null;
     this.firstRowId = null;
+    this.commitTimestampMs = null;
   }
 
   /** Adjust the arg order to avoid conflict with the public constructor below */
@@ -113,7 +115,8 @@ public class GenericManifestFile extends SupportsIndexProjection
       Long existingRowsCount,
       Integer deletedFilesCount,
       Long deletedRowsCount,
-      Long firstRowId) {
+      Long firstRowId,
+      Long commitTimestampMs) {
     super(ManifestFile.schema().columns().size());
     this.avroSchema = AVRO_SCHEMA;
     this.manifestPath = path;
@@ -132,6 +135,7 @@ public class GenericManifestFile extends SupportsIndexProjection
     this.partitions = partitions == null ? null : partitions.toArray(new PartitionFieldSummary[0]);
     this.keyMetadata = ByteBuffers.toByteArray(keyMetadata);
     this.firstRowId = firstRowId;
+    this.commitTimestampMs = commitTimestampMs;
   }
 
   /**
@@ -174,6 +178,7 @@ public class GenericManifestFile extends SupportsIndexProjection
             ? null
             : Arrays.copyOf(toCopy.keyMetadata, toCopy.keyMetadata.length);
     this.firstRowId = toCopy.firstRowId;
+    this.commitTimestampMs = toCopy.commitTimestampMs;
   }
 
   /** Constructor for Java serialization. */
@@ -275,6 +280,11 @@ public class GenericManifestFile extends SupportsIndexProjection
   }
 
   @Override
+  public Long commitTimestampMs() {
+    return commitTimestampMs;
+  }
+
+  @Override
   public int size() {
     return ManifestFile.schema().columns().size();
   }
@@ -323,6 +333,8 @@ public class GenericManifestFile extends SupportsIndexProjection
         return keyMetadata();
       case 15:
         return firstRowId();
+      case 16:
+        return commitTimestampMs();
       default:
         throw new UnsupportedOperationException("Unknown field ordinal: " + basePos);
     }
@@ -383,6 +395,9 @@ public class GenericManifestFile extends SupportsIndexProjection
         return;
       case 15:
         this.firstRowId = (Long) value;
+        return;
+      case 16:
+        this.commitTimestampMs = (Long) value;
         return;
       default:
         // ignore the object, it must be from a newer version of the format
@@ -470,7 +485,8 @@ public class GenericManifestFile extends SupportsIndexProjection
                 toCopy.existingRowsCount(),
                 toCopy.deletedFilesCount(),
                 toCopy.deletedRowsCount(),
-                toCopy.firstRowId());
+                toCopy.firstRowId(),
+                toCopy.commitTimestampMs());
       }
     }
 

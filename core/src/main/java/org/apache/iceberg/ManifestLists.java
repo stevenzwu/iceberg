@@ -55,7 +55,8 @@ class ManifestLists {
       long snapshotId,
       Long parentSnapshotId,
       long sequenceNumber,
-      Long firstRowId) {
+      Long firstRowId,
+      long commitTimestampMs) {
     switch (formatVersion) {
       case 1:
         Preconditions.checkArgument(
@@ -82,7 +83,8 @@ class ManifestLists {
             snapshotId,
             parentSnapshotId,
             sequenceNumber,
-            firstRowId);
+            firstRowId,
+            commitTimestampMs);
     }
     throw new UnsupportedOperationException(
         "Cannot write manifest list for table version: " + formatVersion);

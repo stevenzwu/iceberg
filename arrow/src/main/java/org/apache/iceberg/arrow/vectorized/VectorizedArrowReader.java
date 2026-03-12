@@ -420,6 +420,15 @@ public class VectorizedArrowReader implements VectorizedReader<VectorHolder> {
     }
   }
 
+  public static VectorizedArrowReader lastUpdatedTimestamp(
+      Long baseRowId, Long commitTimestampMs, VectorizedArrowReader tsReader) {
+    if (commitTimestampMs != null && baseRowId != null) {
+      return new LastUpdatedTimestampVectorReader(commitTimestampMs, tsReader);
+    } else {
+      return nulls();
+    }
+  }
+
   public static VectorizedReader<?> replaceWithMetadataReader(
       Types.NestedField icebergField,
       VectorizedReader<?> reader,
@@ -434,6 +443,11 @@ public class VectorizedArrowReader implements VectorizedReader<VectorHolder> {
       Long fileSeqNumber = (Long) idToConstant.get(id);
       return VectorizedArrowReader.lastUpdated(
           baseRowId, fileSeqNumber, (VectorizedArrowReader) reader);
+    } else if (id == MetadataColumns.LAST_UPDATED_TIMESTAMP_MS.fieldId()) {
+      Long baseRowId = (Long) idToConstant.get(MetadataColumns.ROW_ID.fieldId());
+      Long commitTimestampMs = (Long) idToConstant.get(id);
+      return VectorizedArrowReader.lastUpdatedTimestamp(
+          baseRowId, commitTimestampMs, (VectorizedArrowReader) reader);
     } else if (idToConstant.containsKey(id)) {
       // containsKey is used because the constant may be null
       return new ConstantVectorReader<>(icebergField, idToConstant.get(id));
@@ -855,6 +869,72 @@ public class VectorizedArrowReader implements VectorizedReader<VectorHolder> {
       }
 
       seqReader.setBatchSize(batchSize);
+    }
+
+    @Override
+    public void close() {
+      // don't close result vectors as they are not owned by readers
+    }
+  }
+
+  private static final class LastUpdatedTimestampVectorReader extends VectorizedArrowReader {
+    private static final Field LAST_UPDATED_TS =
+        ArrowSchemaUtil.convert(MetadataColumns.LAST_UPDATED_TIMESTAMP_MS);
+
+    private final long commitTimestampMs;
+    private final VectorizedReader<VectorHolder> tsReader;
+    private NullabilityHolder nulls;
+
+    private LastUpdatedTimestampVectorReader(
+        long commitTimestampMs, VectorizedReader<VectorHolder> tsReader) {
+      this.commitTimestampMs = commitTimestampMs;
+      this.tsReader = tsReader == null ? nulls() : tsReader;
+    }
+
+    @Override
+    public VectorHolder read(VectorHolder reuse, int numValsToRead) {
+      FieldVector timestamps = null;
+      try {
+        VectorHolder timestampsHolder = tsReader.read(null, numValsToRead);
+        timestamps = timestampsHolder.vector();
+        ArrowVectorAccessor<?, String, ?, ?> tsAccessor =
+            timestamps == null ? null : ArrowVectorAccessors.getVectorAccessor(timestampsHolder);
+
+        BigIntVector lastUpdatedTimestamps = allocateBigIntVector(LAST_UPDATED_TS, numValsToRead);
+        ArrowBuf dataBuffer = lastUpdatedTimestamps.getDataBuffer();
+        for (int i = 0; i < numValsToRead; i += 1) {
+          long bufferOffset = (long) i * Long.BYTES;
+          if (tsAccessor == null || isNull(timestampsHolder, i)) {
+            dataBuffer.setLong(bufferOffset, commitTimestampMs);
+          } else {
+            long materializedTimestamp = tsAccessor.getLong(i);
+            dataBuffer.setLong(bufferOffset, materializedTimestamp);
+          }
+        }
+
+        lastUpdatedTimestamps.setValueCount(numValsToRead);
+        return VectorHolder.vectorHolder(
+            lastUpdatedTimestamps, MetadataColumns.LAST_UPDATED_TIMESTAMP_MS, nulls);
+      } finally {
+        if (timestamps != null) {
+          timestamps.close();
+        }
+      }
+    }
+
+    @Override
+    public void setRowGroupInfo(
+        PageReadStore source, Map<ColumnPath, ColumnChunkMetaData> metadata) {
+      tsReader.setRowGroupInfo(source, metadata);
+    }
+
+    @Override
+    public void setBatchSize(int batchSize) {
+      if (nulls == null || nulls.size() < batchSize) {
+        this.nulls = newNullabilityHolder(batchSize);
+      }
+
+      tsReader.setBatchSize(batchSize);
     }
 
     @Override

@@ -38,6 +38,7 @@ public abstract class ManifestWriter<F extends ContentFile<F>> implements FileAp
   // stand-in for the current sequence number that will be assigned when the commit is successful
   // this is replaced when writing a manifest list by the ManifestFile wrapper
   static final long UNASSIGNED_SEQ = -1L;
+  static final long UNASSIGNED_TS = -1L;
 
   private final OutputFile file;
   private final EncryptionKeyMetadata keyMetadata;
@@ -153,8 +154,13 @@ public abstract class ManifestWriter<F extends ContentFile<F>> implements FileAp
    * @param fileSequenceNumber a file sequence number (assigned when the file was added)
    */
   public void existing(
-      F existingFile, long fileSnapshotId, long dataSequenceNumber, Long fileSequenceNumber) {
-    reused.wrapExisting(fileSnapshotId, dataSequenceNumber, fileSequenceNumber, existingFile);
+      F existingFile,
+      long fileSnapshotId,
+      long dataSequenceNumber,
+      Long fileSequenceNumber,
+      Long commitTimestampMs) {
+    reused.wrapExisting(
+        fileSnapshotId, dataSequenceNumber, fileSequenceNumber, commitTimestampMs, existingFile);
     addEntry(reused);
   }
 
@@ -172,8 +178,11 @@ public abstract class ManifestWriter<F extends ContentFile<F>> implements FileAp
    * @param dataSequenceNumber a data sequence number of the file (assigned when the file was added)
    * @param fileSequenceNumber a file sequence number (assigned when the file was added)
    */
-  public void delete(F deletedFile, long dataSequenceNumber, Long fileSequenceNumber) {
-    addEntry(reused.wrapDelete(snapshotId, dataSequenceNumber, fileSequenceNumber, deletedFile));
+  public void delete(
+      F deletedFile, long dataSequenceNumber, Long fileSequenceNumber, Long commitTimestampMs) {
+    addEntry(
+        reused.wrapDelete(
+            snapshotId, dataSequenceNumber, fileSequenceNumber, commitTimestampMs, deletedFile));
   }
 
   void delete(ManifestEntry<F> entry) {
@@ -226,7 +235,8 @@ public abstract class ManifestWriter<F extends ContentFile<F>> implements FileAp
         existingRows,
         deletedFiles,
         deletedRows,
-        firstRowId);
+        firstRowId,
+        UNASSIGNED_TS);
   }
 
   @Override

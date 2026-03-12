@@ -35,6 +35,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.LoadingCache;
 import java.io.IOException;
 import java.math.RoundingMode;
+import java.time.Clock;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
@@ -48,7 +49,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.time.Clock;
 import org.apache.iceberg.encryption.EncryptedOutputFile;
 import org.apache.iceberg.encryption.EncryptingFileIO;
 import org.apache.iceberg.events.CreateSnapshotEvent;
@@ -275,6 +275,7 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
 
     long sequenceNumber = base.nextSequenceNumber();
     Long parentSnapshotId = parentSnapshot == null ? null : parentSnapshot.snapshotId();
+    long timestampMillis = snapshotTimestampMillis(parentSnapshot);
 
     runValidations(parentSnapshot);
 
@@ -290,7 +291,8 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
             snapshotId(),
             parentSnapshotId,
             sequenceNumber,
-            base.nextRowId());
+            base.nextRowId(),
+            timestampMillis);
 
     try (writer) {
       // keep track of the manifest lists created
@@ -337,7 +339,7 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
         sequenceNumber,
         snapshotId(),
         parentSnapshotId,
-        snapshotTimestampMillis(parentSnapshot),
+        timestampMillis,
         operation(),
         summary(base),
         base.currentSchemaId(),
@@ -882,6 +884,7 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
           existingRows,
           deletedFiles,
           deletedRows,
+          null,
           null);
 
     } catch (IOException e) {

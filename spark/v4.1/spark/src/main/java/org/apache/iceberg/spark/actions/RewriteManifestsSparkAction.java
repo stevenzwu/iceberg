@@ -523,7 +523,8 @@ public class RewriteManifestsSparkAction
           long sequenceNumber = row.getLong(1);
           Long fileSequenceNumber = row.isNullAt(2) ? null : row.getLong(2);
           Row file = row.getStruct(3);
-          writer.existing(fileWrapper.wrap(file), snapshotId, sequenceNumber, fileSequenceNumber);
+          writer.existing(
+              fileWrapper.wrap(file), snapshotId, sequenceNumber, fileSequenceNumber, null);
         }
       } finally {
         writer.close();

@@ -183,6 +183,16 @@ public class ParquetValueReaders {
     }
   }
 
+  @SuppressWarnings("unchecked")
+  public static ParquetValueReader<Long> lastUpdatedTimestamp(
+      Long baseRowId, Long commitTimestampMs, ParquetValueReader<?> tsReader) {
+    if (commitTimestampMs != null && baseRowId != null) {
+      return new LastUpdatedTimestampReader(commitTimestampMs, (ParquetValueReader<Long>) tsReader);
+    } else {
+      return ParquetValueReaders.nulls();
+    }
+  }
+
   public static ParquetValueReader<UUID> uuids(ColumnDescriptor desc) {
     return new UUIDReader(desc);
   }
@@ -215,6 +225,10 @@ public class ParquetValueReaders {
       Long baseRowId = (Long) idToConstant.get(MetadataColumns.ROW_ID.fieldId());
       Long fileSeqNumber = (Long) idToConstant.get(id);
       return ParquetValueReaders.lastUpdated(baseRowId, fileSeqNumber, reader);
+    } else if (id == MetadataColumns.LAST_UPDATED_TIMESTAMP_MS.fieldId()) {
+      Long baseRowId = (Long) idToConstant.get(MetadataColumns.ROW_ID.fieldId());
+      Long commitTimestampMs = (Long) idToConstant.get(id);
+      return ParquetValueReaders.lastUpdatedTimestamp(baseRowId, commitTimestampMs, reader);
     } else if (idToConstant.containsKey(id)) {
       // containsKey is used because the constant may be null
       return ParquetValueReaders.constant(idToConstant.get(id), constantDL);
@@ -453,6 +467,41 @@ public class ParquetValueReaders {
     @Override
     public void setPageSource(PageReadStore pageStore) {
       seqReader.setPageSource(pageStore);
+    }
+  }
+
+  private static class LastUpdatedTimestampReader implements ParquetValueReader<Long> {
+    private final long commitTimestampMs;
+    private final ParquetValueReader<Long> tsReader;
+
+    private LastUpdatedTimestampReader(long commitTimestampMs, ParquetValueReader<Long> tsReader) {
+      this.commitTimestampMs = commitTimestampMs;
+      this.tsReader = tsReader != null ? tsReader : nulls();
+    }
+
+    @Override
+    public Long read(Long reuse) {
+      Long rowLastUpdatedTimestamp = tsReader.read(null);
+      if (rowLastUpdatedTimestamp != null) {
+        return rowLastUpdatedTimestamp;
+      }
+
+      return commitTimestampMs;
+    }
+
+    @Override
+    public TripleIterator<?> column() {
+      return tsReader.column();
+    }
+
+    @Override
+    public List<TripleIterator<?>> columns() {
+      return tsReader.columns();
+    }
+
+    @Override
+    public void setPageSource(PageReadStore pageStore) {
+      tsReader.setPageSource(pageStore);
     }
   }
 

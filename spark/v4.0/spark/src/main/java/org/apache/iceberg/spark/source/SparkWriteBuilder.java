@@ -134,6 +134,9 @@ class SparkWriteBuilder implements WriteBuilder, SupportsDynamicOverwrite, Suppo
       sparkWriteSchema =
           sparkWriteSchema.add(
               MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER.name(), LongType$.MODULE$);
+      sparkWriteSchema =
+          sparkWriteSchema.add(
+              MetadataColumns.LAST_UPDATED_TIMESTAMP_MS.name(), LongType$.MODULE$);
     }
 
     Schema writeSchema =

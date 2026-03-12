@@ -69,6 +69,7 @@ public class TestManifestListVersions {
   private static final ByteBuffer KEY_METADATA = null;
   private static final long FIRST_ROW_ID = 100L;
   private static final long SNAPSHOT_FIRST_ROW_ID = 130L;
+  private static final long COMMIT_TIMESTAMP_MS = 1710000000000L;
 
   private static final ManifestFile TEST_MANIFEST =
       new GenericManifestFile(
@@ -87,7 +88,8 @@ public class TestManifestListVersions {
           EXISTING_ROWS,
           DELETED_FILES,
           DELETED_ROWS,
-          FIRST_ROW_ID);
+          FIRST_ROW_ID,
+          COMMIT_TIMESTAMP_MS);
 
   private static final ManifestFile TEST_DELETE_MANIFEST =
       new GenericManifestFile(
@@ -106,6 +108,7 @@ public class TestManifestListVersions {
           EXISTING_ROWS,
           DELETED_FILES,
           DELETED_ROWS,
+          null,
           null);
 
   @TempDir private Path temp;
@@ -120,6 +123,9 @@ public class TestManifestListVersions {
   @Test
   public void testV1Write() throws IOException {
     ManifestFile manifest = writeAndReadManifestList(1);
+
+    // v4 fields are not written and are defaulted
+    assertThat(manifest.commitTimestampMs()).isNull();
 
     // v3 fields are not written and are defaulted
     assertThat(manifest.firstRowId()).isNull();
@@ -146,6 +152,9 @@ public class TestManifestListVersions {
   public void testV2Write() throws IOException {
     ManifestFile manifest = writeAndReadManifestList(2);
 
+    // v4 fields are not written and are defaulted
+    assertThat(manifest.commitTimestampMs()).isNull();
+
     // v3 fields are not written and are defaulted
     assertThat(manifest.firstRowId()).isNull();
 
@@ -168,6 +177,9 @@ public class TestManifestListVersions {
   @Test
   public void testV3Write() throws IOException {
     ManifestFile manifest = writeAndReadManifestList(3);
+
+    // v4 fields are not written and are defaulted
+    assertThat(manifest.commitTimestampMs()).isNull();
 
     // all v3 fields should be read correctly
     assertThat(manifest.path()).isEqualTo(PATH);
@@ -205,6 +217,7 @@ public class TestManifestListVersions {
             EXISTING_ROWS,
             DELETED_FILES,
             DELETED_ROWS,
+            null,
             null);
 
     // write uses firstRowId=SNAPSHOT_FIRST_ROW_ID and ADDED_ROWS are assigned
@@ -252,6 +265,7 @@ public class TestManifestListVersions {
             EXISTING_ROWS,
             DELETED_FILES,
             DELETED_ROWS,
+            null,
             null);
 
     // write uses firstRowId=SNAPSHOT_FIRST_ROW_ID and ADDED_ROWS are assigned twice
@@ -286,6 +300,64 @@ public class TestManifestListVersions {
             SNAPSHOT_FIRST_ROW_ID
                 + missingFirstRowId.existingRowsCount()
                 + missingFirstRowId.addedRowsCount());
+  }
+
+  @Test
+  public void testV4Write() throws IOException {
+    ManifestFile manifest = writeAndReadManifestList(4);
+
+    assertThat(manifest.path()).isEqualTo(PATH);
+    assertThat(manifest.length()).isEqualTo(LENGTH);
+    assertThat(manifest.partitionSpecId()).isEqualTo(SPEC_ID);
+    assertThat(manifest.content()).isEqualTo(ManifestContent.DATA);
+    assertThat(manifest.sequenceNumber()).isEqualTo(SEQ_NUM);
+    assertThat(manifest.minSequenceNumber()).isEqualTo(MIN_SEQ_NUM);
+    assertThat(manifest.snapshotId()).isEqualTo(SNAPSHOT_ID);
+    assertThat(manifest.addedFilesCount()).isEqualTo(ADDED_FILES);
+    assertThat(manifest.addedRowsCount()).isEqualTo(ADDED_ROWS);
+    assertThat(manifest.existingFilesCount()).isEqualTo(EXISTING_FILES);
+    assertThat(manifest.existingRowsCount()).isEqualTo(EXISTING_ROWS);
+    assertThat(manifest.deletedFilesCount()).isEqualTo(DELETED_FILES);
+    assertThat(manifest.deletedRowsCount()).isEqualTo(DELETED_ROWS);
+    assertThat(manifest.firstRowId()).isEqualTo(FIRST_ROW_ID);
+    assertThat(manifest.commitTimestampMs()).isEqualTo(COMMIT_TIMESTAMP_MS);
+  }
+
+  @Test
+  public void testV4CommitTimestampInheritance() throws IOException {
+    ManifestFile manifestWithUnassignedTs =
+        new GenericManifestFile(
+            PATH,
+            LENGTH,
+            SPEC_ID,
+            ManifestContent.DATA,
+            SEQ_NUM,
+            MIN_SEQ_NUM,
+            SNAPSHOT_ID,
+            PARTITION_SUMMARIES,
+            KEY_METADATA,
+            ADDED_FILES,
+            ADDED_ROWS,
+            EXISTING_FILES,
+            EXISTING_ROWS,
+            DELETED_FILES,
+            DELETED_ROWS,
+            FIRST_ROW_ID,
+            ManifestWriter.UNASSIGNED_TS);
+
+    assertThat(manifestWithUnassignedTs.commitTimestampMs())
+        .as("Manifest should have unassigned commit timestamp before manifest list write")
+        .isEqualTo(ManifestWriter.UNASSIGNED_TS);
+
+    // manifest already has firstRowId set, so nextRowId is not advanced
+    ManifestFile result =
+        Iterables.getOnlyElement(
+            ManifestLists.read(
+                writeManifestList(4, SNAPSHOT_FIRST_ROW_ID, manifestWithUnassignedTs)));
+
+    assertThat(result.commitTimestampMs())
+        .as("V4 manifest with unassigned timestamp should inherit commit timestamp from snapshot")
+        .isEqualTo(COMMIT_TIMESTAMP_MS);
   }
 
   @Test
@@ -420,6 +492,7 @@ public class TestManifestListVersions {
             EXISTING_ROWS,
             DELETED_FILES,
             DELETED_ROWS,
+            null,
             null);
 
     InputFile manifestList =
@@ -460,7 +533,8 @@ public class TestManifestListVersions {
             SNAPSHOT_ID,
             SNAPSHOT_ID - 1,
             formatVersion > 1 ? SEQ_NUM : 0,
-            SNAPSHOT_FIRST_ROW_ID);
+            SNAPSHOT_FIRST_ROW_ID,
+            COMMIT_TIMESTAMP_MS);
 
     try (writer) {
       for (ManifestFile manifest : manifests) {

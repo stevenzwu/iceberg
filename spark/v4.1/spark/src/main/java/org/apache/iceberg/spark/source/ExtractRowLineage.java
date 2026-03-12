@@ -35,8 +35,9 @@ class ExtractRowLineage implements Function<InternalRow, InternalRow> {
   private static final StructType ROW_LINEAGE_SCHEMA =
       new StructType()
           .add(MetadataColumns.ROW_ID.name(), LongType$.MODULE$, true)
-          .add(MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER.name(), LongType$.MODULE$, true);
-  private static final InternalRow EMPTY_LINEAGE_ROW = new GenericInternalRow(2);
+          .add(MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER.name(), LongType$.MODULE$, true)
+          .add(MetadataColumns.LAST_UPDATED_TIMESTAMP_MS.name(), LongType$.MODULE$, true);
+  private static final InternalRow EMPTY_LINEAGE_ROW = new GenericInternalRow(3);
 
   private final boolean rowLineageRequired;
 
@@ -71,21 +72,27 @@ class ExtractRowLineage implements Function<InternalRow, InternalRow> {
 
   private ProjectingInternalRow rowLineageProjection(ProjectingInternalRow metadataRow) {
     Integer rowIdOrdinal = null;
-    Integer lastUpdatedOrdinal = null;
+    Integer lastUpdatedSeqOrdinal = null;
+    Integer lastUpdatedTsOrdinal = null;
     for (int i = 0; i < metadataRow.numFields(); i++) {
       String fieldName = metadataRow.schema().fields()[i].name();
       if (fieldName.equals(MetadataColumns.ROW_ID.name())) {
         rowIdOrdinal = i;
       } else if (fieldName.equals(MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER.name())) {
-        lastUpdatedOrdinal = i;
+        lastUpdatedSeqOrdinal = i;
+      } else if (fieldName.equals(MetadataColumns.LAST_UPDATED_TIMESTAMP_MS.name())) {
+        lastUpdatedTsOrdinal = i;
       }
     }
 
     Preconditions.checkArgument(rowIdOrdinal != null, "Expected to find row ID in metadata row");
     Preconditions.checkArgument(
-        lastUpdatedOrdinal != null,
+        lastUpdatedSeqOrdinal != null,
         "Expected to find last updated sequence number in metadata row");
-    List<Object> rowLineageProjectionOrdinals = ImmutableList.of(rowIdOrdinal, lastUpdatedOrdinal);
+    Preconditions.checkArgument(
+        lastUpdatedTsOrdinal != null, "Expected to find last updated timestamp in metadata row");
+    List<Object> rowLineageProjectionOrdinals =
+        ImmutableList.of(rowIdOrdinal, lastUpdatedSeqOrdinal, lastUpdatedTsOrdinal);
     return new ProjectingInternalRow(
         ROW_LINEAGE_SCHEMA, JavaConverters.asScala(rowLineageProjectionOrdinals).toIndexedSeq());
   }

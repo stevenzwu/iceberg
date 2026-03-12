@@ -61,7 +61,9 @@ public abstract class DataTestBase {
           MetadataColumns.ROW_ID.fieldId(),
           FIRST_ROW_ID,
           MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER.fieldId(),
-          34L);
+          34L,
+          MetadataColumns.LAST_UPDATED_TIMESTAMP_MS.fieldId(),
+          1710000000000L);
 
   protected abstract void writeAndValidate(Schema schema) throws IOException;
 
@@ -623,7 +625,8 @@ public abstract class DataTestBase {
             required(1, "id", LongType.get()),
             required(2, "data", Types.StringType.get()),
             MetadataColumns.ROW_ID,
-            MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER);
+            MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER,
+            MetadataColumns.LAST_UPDATED_TIMESTAMP_MS);
 
     GenericRecord record = GenericRecord.create(schema);
 
@@ -641,7 +644,9 @@ public abstract class DataTestBase {
                     "_row_id",
                     1_000L,
                     "_last_updated_sequence_number",
-                    33L)),
+                    33L,
+                    "_last_updated_timestamp_ms",
+                    1700000000000L)),
             record.copy(Map.of("id", 4L, "data", "d", "_row_id", 1_001L)),
             record.copy(Map.of("id", 5L, "data", "e"))));
   }

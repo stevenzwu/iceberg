@@ -78,15 +78,16 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
               Types.NestedField.required(1, "id", Types.IntegerType.get()),
               Types.NestedField.required(2, "data", Types.StringType.get()),
               MetadataColumns.ROW_ID,
-              MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER));
+              MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER,
+              MetadataColumns.LAST_UPDATED_TIMESTAMP_MS));
 
   static final List<Record> INITIAL_RECORDS =
       ImmutableList.of(
-          createRecord(SCHEMA, 100, "a", 0L, 1L),
-          createRecord(SCHEMA, 101, "b", 1L, 1L),
-          createRecord(SCHEMA, 102, "c", 2L, 1L),
-          createRecord(SCHEMA, 103, "d", 3L, 1L),
-          createRecord(SCHEMA, 104, "e", 4L, 1L));
+          createRecord(SCHEMA, 100, "a", 0L, 1L, 0L),
+          createRecord(SCHEMA, 101, "b", 1L, 1L, 0L),
+          createRecord(SCHEMA, 102, "c", 2L, 1L, 0L),
+          createRecord(SCHEMA, 103, "d", 3L, 1L, 0L),
+          createRecord(SCHEMA, 104, "e", 4L, 1L, 0L));
 
   @Parameters(
       name =
@@ -141,6 +142,18 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
         null,
         DISTRIBUTED,
         3
+      },
+      {
+        "testhadoop",
+        SparkCatalog.class.getName(),
+        ImmutableMap.of("type", "hadoop"),
+        FileFormat.PARQUET,
+        true,
+        WRITE_DISTRIBUTION_MODE_HASH,
+        true,
+        null,
+        LOCAL,
+        4
       },
     };
   }
@@ -306,6 +319,7 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
     createBranchIfNeeded();
     Table table = loadIcebergTable(spark, tableName);
     appendUnpartitionedRecords(table, INITIAL_RECORDS);
+    long appendTimestamp = latestSnapshot(table).timestampMillis();
     createOrReplaceView(
         "source",
         "id INT, data string",
@@ -319,7 +333,8 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
             + "  UPDATE SET t.data = s.data ",
         commitTarget());
 
-    long updateSequenceNumber = latestSnapshot(table).sequenceNumber();
+    Snapshot updateSnapshot = latestSnapshot(table);
+    long updateSequenceNumber = updateSnapshot.sequenceNumber();
     assertEquals(
         "Rows which are carried over or updated should have expected lineage",
         ImmutableList.of(
@@ -329,6 +344,17 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
             row(103, "d", 3L, 1L),
             row(104, "e", 4L, 1L)),
         rowsWithLineage());
+
+    if (formatVersion >= 4) {
+      long updateTimestamp = updateSnapshot.timestampMillis();
+      assertTimestamps(
+          ImmutableList.of(
+              row(0L, appendTimestamp),
+              row(1L, updateTimestamp),
+              row(2L, updateTimestamp),
+              row(3L, appendTimestamp),
+              row(4L, appendTimestamp)));
+    }
   }
 
   @TestTemplate
@@ -417,9 +443,11 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
     createBranchIfNeeded();
     Table table = loadIcebergTable(spark, tableName);
     appendUnpartitionedRecords(table, INITIAL_RECORDS);
+    long appendTimestamp = latestSnapshot(table).timestampMillis();
 
     sql("UPDATE %s AS t set data = 'updated_b' WHERE id = 101", commitTarget());
-    long updateSequenceNumber = latestSnapshot(table).sequenceNumber();
+    Snapshot updateSnapshot = latestSnapshot(table);
+    long updateSequenceNumber = updateSnapshot.sequenceNumber();
 
     assertEquals(
         "Rows which are carried over or updated should have expected lineage",
@@ -430,6 +458,17 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
             row(103, "d", 3L, 1L),
             row(104, "e", 4L, 1L)),
         rowsWithLineage());
+
+    if (formatVersion >= 4) {
+      long updateTimestamp = updateSnapshot.timestampMillis();
+      assertTimestamps(
+          ImmutableList.of(
+              row(0L, appendTimestamp),
+              row(1L, updateTimestamp),
+              row(2L, appendTimestamp),
+              row(3L, appendTimestamp),
+              row(4L, appendTimestamp)));
+    }
   }
 
   @TestTemplate
@@ -464,7 +503,7 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
     List<Record> initialRecords = Lists.newArrayList();
     int rowId = 0;
     for (int id = 100; id < startingId + numRecords; id++) {
-      initialRecords.add(createRecord(SCHEMA, id, "data_" + id, rowId++, 1L));
+      initialRecords.add(createRecord(SCHEMA, id, "data_" + id, rowId++, 1L, 0L));
     }
 
     appendUnpartitionedRecords(table, initialRecords);
@@ -543,6 +582,12 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
         selectTarget());
   }
 
+  private void assertTimestamps(List<Object[]> expected) {
+    List<Object[]> actual =
+        sql("SELECT _row_id, _last_updated_timestamp_ms FROM %s ORDER BY _row_id", selectTarget());
+    assertEquals("Rows should have expected timestamps", expected, actual);
+  }
+
   /**
    * Partitions the provided records based on the spec and partition function
    *
@@ -600,12 +645,18 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
   }
 
   protected static Record createRecord(
-      Schema schema, int id, String data, long rowId, long lastUpdatedSequenceNumber) {
+      Schema schema,
+      int id,
+      String data,
+      long rowId,
+      long lastUpdatedSequenceNumber,
+      long lastUpdatedTimestampMs) {
     Record record = GenericRecord.create(schema);
     record.set(0, id);
     record.set(1, data);
     record.set(2, rowId);
     record.set(3, lastUpdatedSequenceNumber);
+    record.set(4, lastUpdatedTimestampMs);
     return record;
   }
 

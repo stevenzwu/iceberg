@@ -108,6 +108,8 @@ class SparkCopyOnWriteOperation implements RowLevelOperation {
       metadataAttributes.add(Expressions.column(MetadataColumns.ROW_ID.name()));
       metadataAttributes.add(
           Expressions.column(MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER.name()));
+      metadataAttributes.add(
+          Expressions.column(MetadataColumns.LAST_UPDATED_TIMESTAMP_MS.name()));
     }
 
     return metadataAttributes.toArray(NamedReference[]::new);

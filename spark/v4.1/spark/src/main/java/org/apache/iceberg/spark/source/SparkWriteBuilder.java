@@ -120,6 +120,8 @@ class SparkWriteBuilder implements WriteBuilder, SupportsDynamicOverwrite, Suppo
       writeSchema = writeSchema.add(rowId);
       StructField rowSeq = metaSchema.apply(MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER.name());
       writeSchema = writeSchema.add(rowSeq);
+      StructField rowTs = metaSchema.apply(MetadataColumns.LAST_UPDATED_TIMESTAMP_MS.name());
+      writeSchema = writeSchema.add(rowTs);
       return writeSchema;
     } else {
       return info.schema();

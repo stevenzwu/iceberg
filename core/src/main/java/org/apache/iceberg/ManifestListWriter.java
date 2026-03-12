@@ -114,17 +114,21 @@ abstract class ManifestListWriter implements FileAppender<ManifestFile> {
         long snapshotId,
         Long parentSnapshotId,
         long sequenceNumber,
-        long firstRowId) {
+        long firstRowId,
+        long commitTimestampMs) {
       super(
           snapshotFile,
           encryptionManager,
-          ImmutableMap.of(
-              "snapshot-id", String.valueOf(snapshotId),
-              "parent-snapshot-id", String.valueOf(parentSnapshotId),
-              "sequence-number", String.valueOf(sequenceNumber),
-              "first-row-id", String.valueOf(firstRowId),
-              "format-version", "4"));
-      this.wrapper = new V4Metadata.ManifestFileWrapper(snapshotId, sequenceNumber);
+          ImmutableMap.<String, String>builder()
+              .put("snapshot-id", String.valueOf(snapshotId))
+              .put("parent-snapshot-id", String.valueOf(parentSnapshotId))
+              .put("sequence-number", String.valueOf(sequenceNumber))
+              .put("first-row-id", String.valueOf(firstRowId))
+              .put("commit-timestamp-ms", String.valueOf(commitTimestampMs))
+              .put("format-version", "4")
+              .buildOrThrow());
+      this.wrapper =
+          new V4Metadata.ManifestFileWrapper(snapshotId, sequenceNumber, commitTimestampMs);
       this.nextRowId = firstRowId;
     }
 

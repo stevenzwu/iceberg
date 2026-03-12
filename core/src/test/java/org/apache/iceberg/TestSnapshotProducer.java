@@ -201,7 +201,8 @@ public class TestSnapshotProducer extends TestBase {
 
     long secondTs = table.currentSnapshot().timestampMillis();
     assertThat(secondTs)
-        .as("Lamport clock should fast-forward past the drifted wall clock to the last snapshot timestamp + 1 ms")
+        .as(
+            "Lamport clock should fast-forward past the drifted wall clock to the last snapshot timestamp + 1 ms")
         .isEqualTo(firstTs + 1);
   }
 }

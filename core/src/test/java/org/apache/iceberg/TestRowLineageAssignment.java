@@ -34,9 +34,11 @@ import org.apache.iceberg.types.Types;
 import org.apache.iceberg.types.Types.NestedField;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestTemplate;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 
+@ExtendWith(ParameterizedTestExtension.class)
 public class TestRowLineageAssignment {
   public static final Schema SCHEMA =
       new Schema(
@@ -84,6 +86,12 @@ public class TestRowLineageAssignment {
           .withRecordCount(90)
           .build();
 
+  @Parameters(name = "formatVersion = {0}")
+  private static List<Integer> formatVersion() {
+    return TestHelpers.V3_AND_ABOVE;
+  }
+
+  @Parameter private int formatVersion;
   @TempDir private File location;
 
   private BaseTable table;
@@ -98,7 +106,7 @@ public class TestRowLineageAssignment {
             "test",
             SCHEMA,
             PartitionSpec.unpartitioned(),
-            3,
+            formatVersion,
             Map.of("random-snapshot-ids", "true"));
   }
 
@@ -107,7 +115,7 @@ public class TestRowLineageAssignment {
     TestTables.clearTables();
   }
 
-  @Test
+  @TestTemplate
   public void testSingleFileAppend() {
     assertThat(table.operations().current().nextRowId()).isEqualTo(0L);
 
@@ -119,9 +127,23 @@ public class TestRowLineageAssignment {
 
     ManifestFile manifest = Iterables.getOnlyElement(current.dataManifests(table.io()));
     checkDataFileAssignment(table, manifest, 0L);
+
+    if (formatVersion >= 4) {
+      long snapshotTimestamp = current.timestampMillis();
+      InputFile manifestList = table.io().newInputFile(current.manifestListLocation());
+      checkManifestListCommitTimestamp(manifestList, snapshotTimestamp);
+      assertThat(manifest.commitTimestampMs())
+          .as("V4 manifest should have commit_timestamp_ms matching snapshot timestamp")
+          .isEqualTo(snapshotTimestamp);
+      checkDataFileCommitTimestamp(table, manifest, snapshotTimestamp);
+    } else {
+      assertThat(manifest.commitTimestampMs())
+          .as("Pre-V4 manifest should have null commit_timestamp_ms")
+          .isNull();
+    }
   }
 
-  @Test
+  @TestTemplate
   public void testOverrideFirstRowId() {
     assertThat(table.operations().current().nextRowId()).isEqualTo(0L);
 
@@ -143,7 +165,7 @@ public class TestRowLineageAssignment {
     checkDataFileAssignment(table, manifest, 0L);
   }
 
-  @Test
+  @TestTemplate
   public void testBranchAssignment() {
     // start with a single file in the table
     testSingleFileAppend();
@@ -190,7 +212,7 @@ public class TestRowLineageAssignment {
     checkDataFileAssignment(table, mainManifests.get(1), 0L);
   }
 
-  @Test
+  @TestTemplate
   public void testCherryPickReassignsRowIds() {
     // start with a commit in a branch that diverges from main
     testBranchAssignment();
@@ -217,7 +239,7 @@ public class TestRowLineageAssignment {
     checkDataFileAssignment(table, mainManifests.get(2), 0L);
   }
 
-  @Test
+  @TestTemplate
   public void testFastForwardPreservesRowIds() {
     // start with a single file in the table
     testSingleFileAppend();
@@ -271,7 +293,7 @@ public class TestRowLineageAssignment {
         .isEqualTo(table.snapshot("branch").dataManifests(table.io()));
   }
 
-  @Test
+  @TestTemplate
   public void testMultiFileAppend() {
     assertThat(table.operations().current().nextRowId()).isEqualTo(0L);
 
@@ -286,10 +308,13 @@ public class TestRowLineageAssignment {
     checkDataFileAssignment(table, manifest, 0L, FILE_A.recordCount());
   }
 
-  @Test
+  @TestTemplate
   public void testMultipleFileAppends() {
     // write and validate a multi-file commit
     testMultiFileAppend();
+
+    long firstTimestamp = table.currentSnapshot().timestampMillis();
+    TestHelpers.waitUntilAfter(firstTimestamp);
 
     long startingNextRowId = table.operations().current().nextRowId();
 
@@ -305,9 +330,22 @@ public class TestRowLineageAssignment {
     List<ManifestFile> manifests = current.dataManifests(table.io());
     assertThat(manifests).hasSize(2);
     checkDataFileAssignment(table, manifests.get(0), startingNextRowId);
+
+    if (formatVersion >= 4) {
+      long secondTimestamp = current.timestampMillis();
+      InputFile manifestList = table.io().newInputFile(current.manifestListLocation());
+      checkManifestListCommitTimestamp(manifestList, secondTimestamp, firstTimestamp);
+      assertThat(manifests.get(0).commitTimestampMs()).isEqualTo(secondTimestamp);
+      assertThat(manifests.get(1).commitTimestampMs()).isEqualTo(firstTimestamp);
+      checkDataFileCommitTimestamp(table, manifests.get(0), secondTimestamp);
+      checkDataFileCommitTimestamp(table, manifests.get(1), firstTimestamp, firstTimestamp);
+    } else {
+      assertThat(manifests.get(0).commitTimestampMs()).isNull();
+      assertThat(manifests.get(1).commitTimestampMs()).isNull();
+    }
   }
 
-  @Test
+  @TestTemplate
   public void testCommitConflict() {
     // start with a non-empty table
     testSingleFileAppend();
@@ -376,10 +414,13 @@ public class TestRowLineageAssignment {
     assertThat(newManifests.get(2).path()).isEqualTo(startingManifest);
   }
 
-  @Test
+  @TestTemplate
   public void testOverwrite() {
     // start with a non-empty table
     testSingleFileAppend();
+
+    long firstTimestamp = table.currentSnapshot().timestampMillis();
+    TestHelpers.waitUntilAfter(firstTimestamp);
 
     long startingNextRowId = table.operations().current().nextRowId();
     long nextRowId = startingNextRowId + FILE_B.recordCount();
@@ -398,13 +439,24 @@ public class TestRowLineageAssignment {
     assertThat(manifests).hasSize(2);
     checkDataFileAssignment(table, manifests.get(0), startingNextRowId);
     checkDataFileAssignment(table, manifests.get(1), 0L);
+
+    if (formatVersion >= 4) {
+      long overwriteTimestamp = current.timestampMillis();
+      assertThat(manifests.get(0).commitTimestampMs()).isEqualTo(overwriteTimestamp);
+      checkDataFileCommitTimestamp(table, manifests.get(0), overwriteTimestamp);
+      assertThat(manifests.get(1).commitTimestampMs()).isEqualTo(overwriteTimestamp);
+    } else {
+      assertThat(manifests.get(0).commitTimestampMs()).isNull();
+      assertThat(manifests.get(1).commitTimestampMs()).isNull();
+    }
   }
 
-  @Test
+  @TestTemplate
   public void testOverwriteWithFilteredManifest() {
     // start with multiple data files
     testMultiFileAppend();
 
+    long appendTimestamp = table.currentSnapshot().timestampMillis();
     long startingNextRowId = table.operations().current().nextRowId();
 
     assertThat(table.currentSnapshot().allManifests(table.io())).hasSize(1);
@@ -425,9 +477,21 @@ public class TestRowLineageAssignment {
     checkDataFileAssignment(table, manifests.get(0), startingNextRowId);
     // the starting row ID for FILE_B does not change
     checkDataFileAssignment(table, manifests.get(1), FILE_A.recordCount());
+
+    if (formatVersion >= 4) {
+      long overwriteTimestamp = current.timestampMillis();
+      assertThat(manifests.get(0).commitTimestampMs()).isEqualTo(overwriteTimestamp);
+      checkDataFileCommitTimestamp(table, manifests.get(0), overwriteTimestamp);
+      assertThat(manifests.get(1).commitTimestampMs()).isEqualTo(overwriteTimestamp);
+      // FILE_B is EXISTING in the filtered manifest and should preserve the original timestamp
+      checkDataFileCommitTimestamp(table, manifests.get(1), appendTimestamp);
+    } else {
+      assertThat(manifests.get(0).commitTimestampMs()).isNull();
+      assertThat(manifests.get(1).commitTimestampMs()).isNull();
+    }
   }
 
-  @Test
+  @TestTemplate
   public void testRowDelta() {
     // start with a non-empty table
     testSingleFileAppend();
@@ -449,12 +513,13 @@ public class TestRowLineageAssignment {
     checkDataFileAssignment(table, manifests.get(1), 0L);
   }
 
-  @Test
+  @TestTemplate
   public void testAssignmentWithManifestCompaction() {
     // start with a non-empty table
     // data manifests: [added(FILE_A)]
     testSingleFileAppend();
 
+    long fileATimestamp = table.currentSnapshot().timestampMillis();
     long startingFirstRowId = table.operations().current().nextRowId();
 
     // add FILE_B and set the min so metadata is merged on the next commit
@@ -473,6 +538,8 @@ public class TestRowLineageAssignment {
     checkDataFileAssignment(table, preMergeManifests.get(0), startingFirstRowId);
     checkDataFileAssignment(table, preMergeManifests.get(1), 0L);
 
+    long fileBTimestamp = table.currentSnapshot().timestampMillis();
+
     table.newAppend().appendFile(FILE_C).commit();
     // data manifests: [add(FILE_C), exist(FILE_B), exist(FILE_A)]
 
@@ -487,9 +554,21 @@ public class TestRowLineageAssignment {
     List<ManifestFile> mergedManifests = table.currentSnapshot().dataManifests(table.io());
     checkDataFileAssignment(
         table, mergedManifests.get(0), preMergeNextRowId, startingFirstRowId, 0L);
+
+    if (formatVersion >= 4) {
+      long compactedTimestamp = table.currentSnapshot().timestampMillis();
+      assertThat(mergedManifests.get(0).commitTimestampMs()).isEqualTo(compactedTimestamp);
+      // FILE_C is ADDED with the compaction commit timestamp,
+      // FILE_B is EXISTING preserving its original timestamp,
+      // FILE_A is EXISTING preserving its original timestamp
+      checkDataFileCommitTimestamp(
+          table, mergedManifests.get(0), compactedTimestamp, fileBTimestamp, fileATimestamp);
+    } else {
+      assertThat(mergedManifests.get(0).commitTimestampMs()).isNull();
+    }
   }
 
-  @Test
+  @TestTemplate
   public void testTableUpgrade(@TempDir File altLocation) {
     BaseTable upgradeTable =
         TestTables.create(altLocation, "test_upgrade", SCHEMA, PartitionSpec.unpartitioned(), 2);
@@ -504,7 +583,7 @@ public class TestRowLineageAssignment {
         .as("v2 tables should always have next-row-id=0")
         .isEqualTo(0L);
 
-    TestTables.upgrade(altLocation, "test_upgrade", 3);
+    TestTables.upgrade(altLocation, "test_upgrade", formatVersion);
     upgradeTable.refresh();
 
     assertThat(upgradeTable.operations().current().nextRowId())
@@ -527,9 +606,13 @@ public class TestRowLineageAssignment {
     // manifests without first_row_id will not assign first_row_id
     checkDataFileAssignment(upgradeTable, manifests.get(0), (Long) null);
     checkDataFileAssignment(upgradeTable, manifests.get(1), (Long) null);
+
+    // pre-upgrade manifests should have null commit_timestamp_ms regardless of format version
+    assertThat(manifests.get(0).commitTimestampMs()).isNull();
+    assertThat(manifests.get(1).commitTimestampMs()).isNull();
   }
 
-  @Test
+  @TestTemplate
   public void testAssignmentAfterUpgrade(@TempDir File altLocation) {
     // data manifests: [added(FILE_C)], [existing(FILE_A), deleted(FILE_B)]
     testTableUpgrade(altLocation);
@@ -563,9 +646,36 @@ public class TestRowLineageAssignment {
     // the existing manifests were reused without modification
     assertThat(manifests.get(0).path()).isEqualTo(existingManifests.get(0).path());
     assertThat(manifests.get(1).path()).isEqualTo(existingManifests.get(1).path());
+
+    // reused pre-upgrade manifests should have null commit_timestamp_ms even for V4
+    assertThat(manifests.get(0).commitTimestampMs()).isNull();
+    assertThat(manifests.get(1).commitTimestampMs()).isNull();
+
+    // add a non-empty append to verify new manifests get commit_timestamp_ms
+    long postUpgradeNextRowId = upgradeTable.operations().current().nextRowId();
+    upgradeTable.newAppend().appendFile(FILE_B).commit();
+
+    Snapshot postAppend = upgradeTable.currentSnapshot();
+    List<ManifestFile> postManifests = postAppend.dataManifests(upgradeTable.io());
+    assertThat(postManifests).hasSize(3);
+
+    if (formatVersion >= 4) {
+      long appendTimestamp = postAppend.timestampMillis();
+      assertThat(postManifests.get(0).commitTimestampMs())
+          .as("New V4 manifest should inherit commit_timestamp_ms from snapshot")
+          .isEqualTo(appendTimestamp);
+      checkDataFileCommitTimestamp(upgradeTable, postManifests.get(0), appendTimestamp);
+      // reused pre-upgrade manifests should still have null commit_timestamp_ms
+      assertThat(postManifests.get(1).commitTimestampMs()).isNull();
+      assertThat(postManifests.get(2).commitTimestampMs()).isNull();
+    } else {
+      assertThat(postManifests.get(0).commitTimestampMs()).isNull();
+      assertThat(postManifests.get(1).commitTimestampMs()).isNull();
+      assertThat(postManifests.get(2).commitTimestampMs()).isNull();
+    }
   }
 
-  @Test
+  @TestTemplate
   public void testDeleteAssignmentAfterUpgrade(@TempDir File altLocation) {
     // data manifests: [added(FILE_C)], [existing(FILE_A), deleted(FILE_B)]
     testTableUpgrade(altLocation);
@@ -598,9 +708,19 @@ public class TestRowLineageAssignment {
     checkDataFileAssignment(upgradeTable, manifests.get(1), 0L);
     // the existing manifests were reused without modification
     assertThat(manifests.get(1).path()).isEqualTo(existingManifests.get(1).path());
+
+    if (formatVersion >= 4) {
+      long assignedTimestamp = assigned.timestampMillis();
+      assertThat(manifests.get(0).commitTimestampMs()).isEqualTo(assignedTimestamp);
+      // reused pre-upgrade manifest should have null commit_timestamp_ms
+      assertThat(manifests.get(1).commitTimestampMs()).isNull();
+    } else {
+      assertThat(manifests.get(0).commitTimestampMs()).isNull();
+      assertThat(manifests.get(1).commitTimestampMs()).isNull();
+    }
   }
 
-  @Test
+  @TestTemplate
   public void testBranchAssignmentAfterUpgrade(@TempDir File altLocation) {
     // data manifests: [added(FILE_C)], [existing(FILE_A), deleted(FILE_B)]
     testTableUpgrade(altLocation);
@@ -648,9 +768,16 @@ public class TestRowLineageAssignment {
     // the existing manifests were reused without modification
     assertThat(branchManifests.get(0).path()).isEqualTo(existingManifests.get(0).path());
     assertThat(branchManifests.get(1).path()).isEqualTo(existingManifests.get(1).path());
+
+    // main manifests are unmodified pre-upgrade manifests
+    assertThat(mainManifests.get(0).commitTimestampMs()).isNull();
+    assertThat(mainManifests.get(1).commitTimestampMs()).isNull();
+    // branch reuses pre-upgrade manifests, so commit_timestamp_ms stays null
+    assertThat(branchManifests.get(0).commitTimestampMs()).isNull();
+    assertThat(branchManifests.get(1).commitTimestampMs()).isNull();
   }
 
-  @Test
+  @TestTemplate
   public void testOverwriteAssignmentAfterUpgrade(@TempDir File altLocation) {
     // data manifests: [added(FILE_C)], [existing(FILE_A), deleted(FILE_B)]
     testTableUpgrade(altLocation);
@@ -684,9 +811,21 @@ public class TestRowLineageAssignment {
     checkDataFileAssignment(upgradeTable, manifests.get(2), FILE_B.recordCount());
     // the last manifest is reused without modification
     assertThat(manifests.get(2).path()).isEqualTo(existingManifests.get(1).path());
+
+    if (formatVersion >= 4) {
+      long assignedTimestamp = assigned.timestampMillis();
+      assertThat(manifests.get(0).commitTimestampMs()).isEqualTo(assignedTimestamp);
+      assertThat(manifests.get(1).commitTimestampMs()).isEqualTo(assignedTimestamp);
+      // reused pre-upgrade manifest should have null commit_timestamp_ms
+      assertThat(manifests.get(2).commitTimestampMs()).isNull();
+    } else {
+      assertThat(manifests.get(0).commitTimestampMs()).isNull();
+      assertThat(manifests.get(1).commitTimestampMs()).isNull();
+      assertThat(manifests.get(2).commitTimestampMs()).isNull();
+    }
   }
 
-  @Test
+  @TestTemplate
   public void testRowDeltaAssignmentAfterUpgrade(@TempDir File altLocation) {
     // data manifests: [added(FILE_C)], [existing(FILE_A), deleted(FILE_B)]
     testTableUpgrade(altLocation);
@@ -720,9 +859,13 @@ public class TestRowLineageAssignment {
     // the existing manifests were reused without modification
     assertThat(manifests.get(0).path()).isEqualTo(existingManifests.get(0).path());
     assertThat(manifests.get(1).path()).isEqualTo(existingManifests.get(1).path());
+
+    // reused pre-upgrade manifests should have null commit_timestamp_ms
+    assertThat(manifests.get(0).commitTimestampMs()).isNull();
+    assertThat(manifests.get(1).commitTimestampMs()).isNull();
   }
 
-  @Test
+  @TestTemplate
   public void testUpgradeAssignmentWithManifestCompaction(@TempDir File altLocation) {
     // create a non-empty upgrade table with FILE_A
     BaseTable upgradeTable =
@@ -737,7 +880,7 @@ public class TestRowLineageAssignment {
         .as("v2 tables should always have next-row-id=0")
         .isEqualTo(0L);
 
-    TestTables.upgrade(altLocation, "test_upgrade", 3);
+    TestTables.upgrade(altLocation, "test_upgrade", formatVersion);
     upgradeTable.refresh();
 
     assertThat(upgradeTable.operations().current().nextRowId())
@@ -760,6 +903,10 @@ public class TestRowLineageAssignment {
     checkDataFileAssignment(upgradeTable, preMergeManifests.get(0), (Long) null);
     checkDataFileAssignment(upgradeTable, preMergeManifests.get(1), (Long) null);
 
+    // pre-upgrade manifests should have null commit_timestamp_ms
+    assertThat(preMergeManifests.get(0).commitTimestampMs()).isNull();
+    assertThat(preMergeManifests.get(1).commitTimestampMs()).isNull();
+
     // add FILE_C and trigger metadata compaction
     upgradeTable.newAppend().appendFile(FILE_C).commit();
     // data manifests: [add(FILE_C), exist(FILE_B), exist(FILE_A)]
@@ -779,10 +926,60 @@ public class TestRowLineageAssignment {
         0L,
         FILE_C.recordCount(),
         FILE_C.recordCount() + FILE_B.recordCount());
+
+    if (formatVersion >= 4) {
+      long mergedTimestamp = upgradeTable.currentSnapshot().timestampMillis();
+      assertThat(mergedManifests.get(0).commitTimestampMs()).isEqualTo(mergedTimestamp);
+      // FILE_C is ADDED with the compaction commit timestamp,
+      // FILE_B and FILE_A are EXISTING carried over from pre-upgrade manifests with null timestamps
+      checkDataFileCommitTimestamp(
+          upgradeTable, mergedManifests.get(0), mergedTimestamp, null, null);
+    } else {
+      assertThat(mergedManifests.get(0).commitTimestampMs()).isNull();
+    }
   }
 
   private static ManifestContent content(int ordinal) {
     return ManifestContent.values()[ordinal];
+  }
+
+  private static void checkManifestListCommitTimestamp(InputFile in, long... expectedTimestamps) {
+    int index = 0;
+    for (ManifestFile manifest : ManifestLists.read(in)) {
+      if (manifest.content() != ManifestContent.DATA) {
+        // delete manifests do not have commit_timestamp_ms
+        continue;
+      }
+      if (index < expectedTimestamps.length) {
+        assertThat(manifest.commitTimestampMs())
+            .as("commit_timestamp_ms for data manifest (%s) should match", index)
+            .isEqualTo(expectedTimestamps[index]);
+      } else {
+        fail("No expected commit_timestamp_ms for manifest: " + manifest);
+      }
+      index += 1;
+    }
+  }
+
+  private static void checkDataFileCommitTimestamp(
+      Table table, ManifestFile manifest, Long... expectedTimestamps) {
+    int index = 0;
+    try (ManifestReader<DataFile> reader =
+        ManifestFiles.read(manifest, table.io(), table.specs())) {
+      for (DataFile file : reader) {
+        if (file.content() == FileContent.DATA) {
+          assertThat(index)
+              .as("More data files than expected timestamps")
+              .isLessThan(expectedTimestamps.length);
+          assertThat(file.commitTimestampMs())
+              .as("Data file (%s) commit_timestamp_ms should match", index)
+              .isEqualTo(expectedTimestamps[index]);
+          index += 1;
+        }
+      }
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
   }
 
   private static void checkManifestListAssignment(InputFile in, Long... firstRowIds) {

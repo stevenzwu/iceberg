@@ -22,9 +22,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.iceberg.exceptions.ValidationException;
+import org.apache.iceberg.relocated.com.google.common.collect.Iterables;
 import org.apache.iceberg.types.Types;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -384,6 +387,100 @@ public class TestRowLineageMetadata {
     assertThat(table.currentSnapshot().firstRowId()).isEqualTo(60);
     assertThat(table.currentSnapshot().addedRows()).isEqualTo(0);
     assertThat(table.ops().current().nextRowId()).isEqualTo(60);
+  }
+
+  @TestTemplate
+  public void testCommitTimestampOnAppend() {
+    TestTables.TestTable table =
+        TestTables.create(
+            tableDir, "test", TEST_SCHEMA, PartitionSpec.unpartitioned(), formatVersion);
+
+    table.newAppend().appendFile(fileWithRows(30)).commit();
+    Snapshot snap = table.currentSnapshot();
+    ManifestFile manifest = Iterables.getOnlyElement(snap.dataManifests(table.io()));
+
+    if (formatVersion >= 4) {
+      assertThat(manifest.commitTimestampMs())
+          .as("V4 manifest should have commit_timestamp_ms matching snapshot timestamp")
+          .isEqualTo(snap.timestampMillis());
+      checkEntryCommitTimestamp(table, manifest, snap.timestampMillis());
+    } else {
+      assertThat(manifest.commitTimestampMs())
+          .as("Pre-V4 manifest should have null commit_timestamp_ms")
+          .isNull();
+      checkEntryCommitTimestamp(table, manifest, null);
+    }
+  }
+
+  @TestTemplate
+  public void testCommitTimestampOnMultipleAppends() {
+    TestTables.TestTable table =
+        TestTables.create(
+            tableDir, "test", TEST_SCHEMA, PartitionSpec.unpartitioned(), formatVersion);
+
+    table.newAppend().appendFile(fileWithRows(30)).commit();
+    long firstTimestamp = table.currentSnapshot().timestampMillis();
+
+    table.newAppend().appendFile(fileWithRows(20)).commit();
+    Snapshot second = table.currentSnapshot();
+    long secondTimestamp = second.timestampMillis();
+
+    List<ManifestFile> manifests = second.dataManifests(table.io());
+    assertThat(manifests).hasSize(2);
+
+    if (formatVersion >= 4) {
+      assertThat(secondTimestamp).isGreaterThan(firstTimestamp);
+      assertThat(manifests.get(0).commitTimestampMs()).isEqualTo(secondTimestamp);
+      assertThat(manifests.get(1).commitTimestampMs()).isEqualTo(firstTimestamp);
+      checkEntryCommitTimestamp(table, manifests.get(0), secondTimestamp);
+      checkEntryCommitTimestamp(table, manifests.get(1), firstTimestamp);
+    } else {
+      assertThat(manifests.get(0).commitTimestampMs()).isNull();
+      assertThat(manifests.get(1).commitTimestampMs()).isNull();
+    }
+  }
+
+  @TestTemplate
+  public void testCommitTimestampOnRewrite() {
+    TestTables.TestTable table =
+        TestTables.create(
+            tableDir, "test", TEST_SCHEMA, PartitionSpec.unpartitioned(), formatVersion);
+
+    DataFile filePart1 = fileWithRows(30);
+    DataFile filePart2 = fileWithRows(30);
+    DataFile fileCompacted = fileWithRows(60);
+
+    table.newAppend().appendFile(filePart1).appendFile(filePart2).commit();
+    table.newRewrite().deleteFile(filePart1).deleteFile(filePart2).addFile(fileCompacted).commit();
+
+    Snapshot rewrite = table.currentSnapshot();
+    List<ManifestFile> manifests = rewrite.dataManifests(table.io());
+
+    if (formatVersion >= 4) {
+      for (ManifestFile manifest : manifests) {
+        assertThat(manifest.commitTimestampMs())
+            .as("Rewrite manifest should have commit_timestamp_ms")
+            .isEqualTo(rewrite.timestampMillis());
+      }
+    } else {
+      for (ManifestFile manifest : manifests) {
+        assertThat(manifest.commitTimestampMs()).isNull();
+      }
+    }
+  }
+
+  private void checkEntryCommitTimestamp(
+      Table table, ManifestFile manifest, Long expectedTimestamp) {
+    try (ManifestReader<DataFile> reader =
+        ManifestFiles.read(manifest, table.io(), table.specs())) {
+      for (DataFile file : reader) {
+        assertThat(file.commitTimestampMs())
+            .as("Data file commit_timestamp_ms should match expected value")
+            .isEqualTo(expectedTimestamp);
+      }
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
   }
 
   private final AtomicInteger fileNum = new AtomicInteger(0);

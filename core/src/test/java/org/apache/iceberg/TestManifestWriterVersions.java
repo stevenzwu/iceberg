@@ -84,6 +84,7 @@ public class TestManifestWriterVersions {
   private static final List<Long> OFFSETS = ImmutableList.of(4L);
   private static final Integer SORT_ORDER_ID = 2;
   private static final long FIRST_ROW_ID = 100L;
+  private static final long COMMIT_TIMESTAMP_MS = 1710000000000L;
 
   private static final DataFile DATA_FILE =
       new GenericDataFile(
@@ -309,6 +310,114 @@ public class TestManifestWriterVersions {
     checkRewrittenEntry(readManifest(manifest3), 0L, FileContent.DATA, FIRST_ROW_ID);
   }
 
+  @Test
+  public void testV4Write() throws IOException {
+    ManifestFile manifest = writeManifest(4);
+    assertThat(manifest.commitTimestampMs())
+        .as("commit_timestamp_ms should be unassigned before manifest list write")
+        .isEqualTo(ManifestWriter.UNASSIGNED_TS);
+
+    ManifestEntry<DataFile> entry = readManifest(manifest);
+    checkEntry(
+        entry,
+        ManifestWriter.UNASSIGNED_SEQ,
+        ManifestWriter.UNASSIGNED_SEQ,
+        FileContent.DATA,
+        FIRST_ROW_ID);
+
+    // before manifest list inheritance, the entry inherits UNASSIGNED_TS from the manifest
+    assertThat(entry.commitTimestampMs())
+        .as("Entry commit_timestamp_ms should be unassigned before manifest list write")
+        .isEqualTo(ManifestWriter.UNASSIGNED_TS);
+  }
+
+  @Test
+  public void testV4WriteWithInheritance() throws IOException {
+    DataFile withoutFirstRowId =
+        DataFiles.builder(SPEC).copy(DATA_FILE).withFirstRowId(null).build();
+
+    ManifestFile manifest = writeAndReadManifestList(writeManifest(4, withoutFirstRowId), 4);
+    checkManifest(manifest, SEQUENCE_NUMBER);
+    assertThat(manifest.content()).isEqualTo(ManifestContent.DATA);
+    assertThat(manifest.commitTimestampMs())
+        .as("V4 manifest should have commit_timestamp_ms assigned from manifest list")
+        .isEqualTo(COMMIT_TIMESTAMP_MS);
+
+    ManifestEntry<DataFile> entry = readManifest(manifest);
+    checkEntry(entry, SEQUENCE_NUMBER, SEQUENCE_NUMBER, FileContent.DATA, FIRST_ROW_ID);
+
+    // V4 entries inherit commit_timestamp_ms from the manifest
+    assertThat(entry.commitTimestampMs())
+        .as("V4 entry should inherit commit_timestamp_ms from manifest")
+        .isEqualTo(COMMIT_TIMESTAMP_MS);
+    assertThat(entry.file().commitTimestampMs())
+        .as("V4 data file should inherit commit_timestamp_ms from entry")
+        .isEqualTo(COMMIT_TIMESTAMP_MS);
+  }
+
+  @Test
+  public void testV4ManifestListRewriteWithInheritance() throws IOException {
+    // write with v1
+    ManifestFile manifest = writeAndReadManifestList(writeManifest(1), 1);
+    checkManifest(manifest, 0L);
+
+    // rewrite existing metadata with a V4 manifest list
+    ManifestFile manifest4 = writeAndReadManifestList(manifest, 4);
+    checkManifest(manifest4, 0L);
+
+    // pre-V4 manifest should not have commit_timestamp_ms assigned
+    assertThat(manifest4.commitTimestampMs())
+        .as("Pre-V4 manifest carried into V4 should have null commit_timestamp_ms")
+        .isNull();
+
+    ManifestEntry<DataFile> entry = readManifest(manifest4);
+    checkEntry(entry, 0L, 0L, FileContent.DATA, FIRST_ROW_ID);
+
+    // pre-V4 entries should not inherit commit_timestamp_ms
+    assertThat(entry.commitTimestampMs())
+        .as("Pre-V4 entry should have null commit_timestamp_ms after V4 manifest list rewrite")
+        .isNull();
+    assertThat(entry.file().commitTimestampMs())
+        .as("Pre-V4 data file should have null commit_timestamp_ms after V4 manifest list rewrite")
+        .isNull();
+  }
+
+  @Test
+  public void testV4ManifestRewriteWithInheritance() throws IOException {
+    // write with v1
+    ManifestFile manifest = writeAndReadManifestList(writeManifest(1), 1);
+    checkManifest(manifest, 0L);
+
+    // rewrite the manifest file using a v4 manifest
+    ManifestFile rewritten = rewriteManifest(manifest, 4);
+    checkRewrittenManifest(rewritten, ManifestWriter.UNASSIGNED_SEQ, 0L);
+
+    // add the v4 manifest to a v4 manifest list, with a sequence number
+    ManifestFile manifest4 = writeAndReadManifestList(rewritten, 4);
+    checkRewrittenManifest(manifest4, SEQUENCE_NUMBER, 0L);
+
+    // should not inherit the v4 sequence number because it was written into the v4 manifest
+    checkRewrittenEntry(readManifest(manifest4), 0L, FileContent.DATA, FIRST_ROW_ID);
+  }
+
+  @Test
+  public void testPreV4ManifestsHaveNullCommitTimestamp() throws IOException {
+    for (int version : TestHelpers.V3_AND_BELOW) {
+      ManifestFile manifest = writeAndReadManifestList(writeManifest(version), version);
+      assertThat(manifest.commitTimestampMs())
+          .as("V%d manifest should have null commit_timestamp_ms", version)
+          .isNull();
+
+      ManifestEntry<DataFile> entry = readManifest(manifest);
+      assertThat(entry.commitTimestampMs())
+          .as("V%d entry should have null commit_timestamp_ms", version)
+          .isNull();
+      assertThat(entry.file().commitTimestampMs())
+          .as("V%d data file should have null commit_timestamp_ms", version)
+          .isNull();
+    }
+  }
+
   void checkEntry(
       ManifestEntry<?> entry,
       Long expectedDataSequenceNumber,
@@ -415,7 +524,8 @@ public class TestManifestWriterVersions {
             SNAPSHOT_ID,
             SNAPSHOT_ID - 1,
             formatVersion > 1 ? SEQUENCE_NUMBER : 0,
-            FIRST_ROW_ID)) {
+            FIRST_ROW_ID,
+            COMMIT_TIMESTAMP_MS)) {
       writer.add(manifest);
     }
 

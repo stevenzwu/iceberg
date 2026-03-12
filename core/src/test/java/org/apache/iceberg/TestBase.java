@@ -433,9 +433,9 @@ public class TestBase {
           return entry.wrapAppend(snapshotId, file);
         }
       case EXISTING:
-        return entry.wrapExisting(snapshotId, dataSequenceNumber, fileSequenceNumber, file);
+        return entry.wrapExisting(snapshotId, dataSequenceNumber, fileSequenceNumber, null, file);
       case DELETED:
-        return entry.wrapDelete(snapshotId, dataSequenceNumber, fileSequenceNumber, file);
+        return entry.wrapDelete(snapshotId, dataSequenceNumber, fileSequenceNumber, null, file);
       default:
         throw new IllegalArgumentException("Unexpected entry status: " + status);
     }

@@ -295,7 +295,8 @@ public class RewriteTablePathUtil {
             snapshot.snapshotId(),
             snapshot.parentId(),
             snapshot.sequenceNumber(),
-            snapshot.firstRowId())) {
+            snapshot.firstRowId(),
+            snapshot.timestampMillis())) {
 
       for (ManifestFile file : manifestFiles) {
         ManifestFile newFile = file.copy();
@@ -493,10 +494,18 @@ public class RewriteTablePathUtil {
         break;
       case EXISTING:
         writer.existing(
-            file, entry.snapshotId(), entry.dataSequenceNumber(), entry.fileSequenceNumber());
+            file,
+            entry.snapshotId(),
+            entry.dataSequenceNumber(),
+            entry.fileSequenceNumber(),
+            entry.commitTimestampMs());
         break;
       case DELETED:
-        writer.delete(file, entry.dataSequenceNumber(), entry.fileSequenceNumber());
+        writer.delete(
+            file,
+            entry.dataSequenceNumber(),
+            entry.fileSequenceNumber(),
+            entry.commitTimestampMs());
         break;
     }
   }

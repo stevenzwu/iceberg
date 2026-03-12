@@ -45,6 +45,7 @@ class ManifestFileParser {
   private static final String PARTITION_FIELD_SUMMARY = "partition-field-summary";
   private static final String KEY_METADATA = "key-metadata";
   private static final String FIRST_ROW_ID = "first-row-id";
+  private static final String COMMIT_TIMESTAMP_MS = "commit-timestamp-ms";
 
   private ManifestFileParser() {}
 
@@ -93,6 +94,8 @@ class ManifestFileParser {
     }
 
     JsonUtil.writeLongFieldIfPresent(FIRST_ROW_ID, manifestFile.firstRowId(), generator);
+    JsonUtil.writeLongFieldIfPresent(
+        COMMIT_TIMESTAMP_MS, manifestFile.commitTimestampMs(), generator);
 
     generator.writeEndObject();
   }
@@ -142,6 +145,7 @@ class ManifestFileParser {
     ByteBuffer keyMetadata = JsonUtil.getByteBufferOrNull(KEY_METADATA, jsonNode);
 
     Long firstRowId = JsonUtil.getLongOrNull(FIRST_ROW_ID, jsonNode);
+    Long commitTimestampMs = JsonUtil.getLongOrNull(COMMIT_TIMESTAMP_MS, jsonNode);
 
     return new GenericManifestFile(
         path,
@@ -159,7 +163,8 @@ class ManifestFileParser {
         existingRowsCount,
         deletedFilesCount,
         deletedRowsCount,
-        firstRowId);
+        firstRowId,
+        commitTimestampMs);
   }
 
   private static class PartitionFieldSummaryParser {

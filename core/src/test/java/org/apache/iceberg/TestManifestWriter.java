@@ -227,11 +227,11 @@ public class TestManifestWriter extends TestBase {
         addedFileCounts[fileIndex] += 1;
         addedRowCounts[fileIndex] += i;
       } else if (type == 1) {
-        writer.existing(newFile(i), 1, 1, null);
+        writer.existing(newFile(i), 1, 1, null, null);
         existingFileCounts[fileIndex] += 1;
         existingRowCounts[fileIndex] += i;
       } else {
-        writer.delete(newFile(i), 1, null);
+        writer.delete(newFile(i), 1, null, null);
         deletedFileCounts[fileIndex] += 1;
         deletedRowCounts[fileIndex] += i;
       }
@@ -283,11 +283,11 @@ public class TestManifestWriter extends TestBase {
         addedFileCounts[fileIndex] += 1;
         addedRowCounts[fileIndex] += i;
       } else if (type == 1) {
-        writer.existing(newPosDeleteFile(i), 1, 1, null);
+        writer.existing(newPosDeleteFile(i), 1, 1, null, null);
         existingFileCounts[fileIndex] += 1;
         existingRowCounts[fileIndex] += i;
       } else {
-        writer.delete(newPosDeleteFile(i), 1, null);
+        writer.delete(newPosDeleteFile(i), 1, null, null);
         deletedFileCounts[fileIndex] += 1;
         deletedRowCounts[fileIndex] += i;
       }

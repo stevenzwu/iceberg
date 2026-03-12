@@ -47,9 +47,10 @@ interface ManifestEntry<F extends ContentFile<F>> {
   Types.NestedField SEQUENCE_NUMBER = optional(3, "sequence_number", Types.LongType.get());
   Types.NestedField FILE_SEQUENCE_NUMBER =
       optional(4, "file_sequence_number", Types.LongType.get());
+  Types.NestedField COMMIT_TIMESTAMP_MS = optional(5, "commit_timestamp_ms", Types.LongType.get());
   int DATA_FILE_ID = 2;
 
-  // next ID to assign: 5
+  // next ID to assign: 6
 
   static Schema getSchema(StructType partitionType) {
     return wrapFileSchema(DataFile.getType(partitionType));
@@ -61,7 +62,8 @@ interface ManifestEntry<F extends ContentFile<F>> {
         SNAPSHOT_ID,
         SEQUENCE_NUMBER,
         FILE_SEQUENCE_NUMBER,
-        required(DATA_FILE_ID, "data_file", fileType));
+        required(DATA_FILE_ID, "data_file", fileType),
+        COMMIT_TIMESTAMP_MS);
   }
 
   /** Returns the status of the file, whether EXISTING, ADDED, or DELETED. */
@@ -124,6 +126,25 @@ interface ManifestEntry<F extends ContentFile<F>> {
    * @param fileSequenceNumber a file sequence number
    */
   void setFileSequenceNumber(long fileSequenceNumber);
+
+  /**
+   * Returns the commit timestamp in milliseconds.
+   *
+   * <p>The commit timestamp represents the snapshot timestamp of the commit that added the file. It
+   * is used for inheriting {@code _last_updated_timestamp_ms} in V4 tables.
+   *
+   * <p>This method can return null if the commit timestamp is unknown.
+   */
+  default Long commitTimestampMs() {
+    return null;
+  }
+
+  /**
+   * Sets the commit timestamp in milliseconds for this manifest entry.
+   *
+   * @param commitTimestampMs a commit timestamp in milliseconds
+   */
+  default void setCommitTimestampMs(long commitTimestampMs) {}
 
   /** Returns a file. */
   F file();

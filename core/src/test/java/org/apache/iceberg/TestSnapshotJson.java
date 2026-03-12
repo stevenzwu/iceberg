@@ -241,6 +241,7 @@ public class TestSnapshotJson {
             snapshotId,
             parentSnapshotId,
             0,
+            0L,
             0L)) {
       writer.addAll(manifests);
     }

@@ -144,6 +144,7 @@ abstract class BaseSparkTable
     if (TableUtil.supportsRowLineage(table)) {
       cols.add(SparkMetadataColumns.ROW_ID);
       cols.add(SparkMetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER);
+      cols.add(SparkMetadataColumns.LAST_UPDATED_TIMESTAMP_MS);
     }
 
     return cols.toArray(SparkMetadataColumn[]::new);

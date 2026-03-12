@@ -262,6 +262,12 @@ public class ValueReaders {
       Long fileSeqNumber = (Long) idToConstant.get(fieldId);
       return Pair.of(
           projectionPos, ValueReaders.lastUpdated(firstRowId, fileSeqNumber, fieldReader));
+    } else if (Objects.equals(fieldId, MetadataColumns.LAST_UPDATED_TIMESTAMP_MS.fieldId())) {
+      Long firstRowId = (Long) idToConstant.get(MetadataColumns.ROW_ID.fieldId());
+      Long commitTimestampMs = (Long) idToConstant.get(fieldId);
+      return Pair.of(
+          projectionPos,
+          ValueReaders.lastUpdatedTimestamp(firstRowId, commitTimestampMs, fieldReader));
     } else {
       return fieldReader(fieldId, projectionPos, fieldReader, idToConstant);
     }
@@ -334,6 +340,15 @@ public class ValueReaders {
       Long baseRowId, Long fileSeqNumber, ValueReader<?> seqReader) {
     if (fileSeqNumber != null && baseRowId != null) {
       return new LastUpdatedSeqReader(fileSeqNumber, (ValueReader<Long>) seqReader);
+    } else {
+      return ValueReaders.constant(null);
+    }
+  }
+
+  public static ValueReader<Long> lastUpdatedTimestamp(
+      Long baseRowId, Long commitTimestampMs, ValueReader<?> tsReader) {
+    if (commitTimestampMs != null && baseRowId != null) {
+      return new LastUpdatedTimestampReader(commitTimestampMs, (ValueReader<Long>) tsReader);
     } else {
       return ValueReaders.constant(null);
     }
@@ -1358,6 +1373,31 @@ public class ValueReaders {
     @Override
     public void skip(Decoder decoder) throws IOException {
       seqReader.skip(decoder);
+    }
+  }
+
+  static class LastUpdatedTimestampReader implements ValueReader<Long> {
+    private final long commitTimestampMs;
+    private final ValueReader<Long> tsReader;
+
+    LastUpdatedTimestampReader(long commitTimestampMs, ValueReader<Long> tsReader) {
+      this.commitTimestampMs = commitTimestampMs;
+      this.tsReader = tsReader;
+    }
+
+    @Override
+    public Long read(Decoder ignored, Object reuse) throws IOException {
+      Long rowLastUpdatedTimestamp = tsReader.read(ignored, reuse);
+      if (rowLastUpdatedTimestamp != null) {
+        return rowLastUpdatedTimestamp;
+      }
+
+      return commitTimestampMs;
+    }
+
+    @Override
+    public void skip(Decoder decoder) throws IOException {
+      tsReader.skip(decoder);
     }
   }
 }

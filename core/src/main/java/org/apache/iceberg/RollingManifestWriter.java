@@ -86,8 +86,18 @@ public class RollingManifestWriter<F extends ContentFile<F>> implements Closeabl
    * @param fileSequenceNumber a file sequence number (assigned when the file was added)
    */
   public void existing(
-      F existingFile, long fileSnapshotId, long dataSequenceNumber, Long fileSequenceNumber) {
-    currentWriter().existing(existingFile, fileSnapshotId, dataSequenceNumber, fileSequenceNumber);
+      F existingFile,
+      long fileSnapshotId,
+      long dataSequenceNumber,
+      Long fileSequenceNumber,
+      Long commitTimestampMs) {
+    currentWriter()
+        .existing(
+            existingFile,
+            fileSnapshotId,
+            dataSequenceNumber,
+            fileSequenceNumber,
+            commitTimestampMs);
     currentFileRows++;
   }
 
@@ -101,8 +111,9 @@ public class RollingManifestWriter<F extends ContentFile<F>> implements Closeabl
    * @param dataSequenceNumber a data sequence number of the file (assigned when the file was added)
    * @param fileSequenceNumber a file sequence number (assigned when the file was added)
    */
-  public void delete(F deletedFile, long dataSequenceNumber, Long fileSequenceNumber) {
-    currentWriter().delete(deletedFile, dataSequenceNumber, fileSequenceNumber);
+  public void delete(
+      F deletedFile, long dataSequenceNumber, Long fileSequenceNumber, Long commitTimestampMs) {
+    currentWriter().delete(deletedFile, dataSequenceNumber, fileSequenceNumber, commitTimestampMs);
     currentFileRows++;
   }
 

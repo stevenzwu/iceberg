@@ -32,6 +32,7 @@ class GenericManifestEntry<F extends ContentFile<F>>
   private Long snapshotId = null;
   private Long dataSequenceNumber = null;
   private Long fileSequenceNumber = null;
+  private Long commitTimestampMs = null;
   private F file = null;
 
   GenericManifestEntry(org.apache.avro.Schema schema) {
@@ -49,20 +50,30 @@ class GenericManifestEntry<F extends ContentFile<F>>
     this.snapshotId = toCopy.snapshotId;
     this.dataSequenceNumber = toCopy.dataSequenceNumber;
     this.fileSequenceNumber = toCopy.fileSequenceNumber;
+    this.commitTimestampMs = toCopy.commitTimestampMs;
     this.file = toCopy.file().copy(fullCopy);
   }
 
   ManifestEntry<F> wrapExisting(ManifestEntry<F> entry) {
     return wrapExisting(
-        entry.snapshotId(), entry.dataSequenceNumber(), entry.fileSequenceNumber(), entry.file());
+        entry.snapshotId(),
+        entry.dataSequenceNumber(),
+        entry.fileSequenceNumber(),
+        entry.commitTimestampMs(),
+        entry.file());
   }
 
   ManifestEntry<F> wrapExisting(
-      Long newSnapshotId, Long newDataSequenceNumber, Long newFileSequenceNumber, F newFile) {
+      Long newSnapshotId,
+      Long newDataSequenceNumber,
+      Long newFileSequenceNumber,
+      Long newCommitTimestampMs,
+      F newFile) {
     this.status = Status.EXISTING;
     this.snapshotId = newSnapshotId;
     this.dataSequenceNumber = newDataSequenceNumber;
     this.fileSequenceNumber = newFileSequenceNumber;
+    this.commitTimestampMs = newCommitTimestampMs;
     this.file = newFile;
     return this;
   }
@@ -76,21 +87,31 @@ class GenericManifestEntry<F extends ContentFile<F>>
     this.snapshotId = newSnapshotId;
     this.dataSequenceNumber = newDataSequenceNumber;
     this.fileSequenceNumber = null;
+    this.commitTimestampMs = null;
     this.file = Delegates.suppressFirstRowId(newFile);
     return this;
   }
 
   ManifestEntry<F> wrapDelete(Long newSnapshotId, ManifestEntry<F> entry) {
     return wrapDelete(
-        newSnapshotId, entry.dataSequenceNumber(), entry.fileSequenceNumber(), entry.file());
+        newSnapshotId,
+        entry.dataSequenceNumber(),
+        entry.fileSequenceNumber(),
+        entry.commitTimestampMs(),
+        entry.file());
   }
 
   ManifestEntry<F> wrapDelete(
-      Long newSnapshotId, Long newDataSequenceNumber, Long newFileSequenceNumber, F newFile) {
+      Long newSnapshotId,
+      Long newDataSequenceNumber,
+      Long newFileSequenceNumber,
+      Long newCommitTimestampMs,
+      F newFile) {
     this.status = Status.DELETED;
     this.snapshotId = newSnapshotId;
     this.dataSequenceNumber = newDataSequenceNumber;
     this.fileSequenceNumber = newFileSequenceNumber;
+    this.commitTimestampMs = newCommitTimestampMs;
     this.file = newFile;
     return this;
   }
@@ -119,6 +140,11 @@ class GenericManifestEntry<F extends ContentFile<F>>
   @Override
   public Long fileSequenceNumber() {
     return fileSequenceNumber;
+  }
+
+  @Override
+  public Long commitTimestampMs() {
+    return commitTimestampMs;
   }
 
   /**
@@ -155,6 +181,11 @@ class GenericManifestEntry<F extends ContentFile<F>>
   }
 
   @Override
+  public void setCommitTimestampMs(long newCommitTimestampMs) {
+    this.commitTimestampMs = newCommitTimestampMs;
+  }
+
+  @Override
   @SuppressWarnings("unchecked")
   public void put(int i, Object v) {
     switch (i) {
@@ -172,6 +203,9 @@ class GenericManifestEntry<F extends ContentFile<F>>
         return;
       case 4:
         this.file = (F) v;
+        return;
+      case 5:
+        this.commitTimestampMs = (Long) v;
         return;
       default:
         // ignore the object, it must be from a newer version of the format
@@ -196,6 +230,8 @@ class GenericManifestEntry<F extends ContentFile<F>>
         return fileSequenceNumber;
       case 4:
         return file;
+      case 5:
+        return commitTimestampMs;
       default:
         throw new UnsupportedOperationException("Unknown field ordinal: " + i);
     }
@@ -213,7 +249,7 @@ class GenericManifestEntry<F extends ContentFile<F>>
 
   @Override
   public int size() {
-    return 5;
+    return 6;
   }
 
   @Override
@@ -223,6 +259,7 @@ class GenericManifestEntry<F extends ContentFile<F>>
         .add("snapshot_id", snapshotId)
         .add("data_sequence_number", dataSequenceNumber)
         .add("file_sequence_number", fileSequenceNumber)
+        .add("commit_timestamp_ms", commitTimestampMs)
         .add("file", file)
         .toString();
   }

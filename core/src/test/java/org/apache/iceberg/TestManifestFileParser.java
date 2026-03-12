@@ -97,7 +97,8 @@ public class TestManifestFileParser {
         30L,
         0,
         0L,
-        10L);
+        10L,
+        1234567890L);
   }
 
   private String manifestFileJson() {
@@ -107,6 +108,6 @@ public class TestManifestFileParser {
         + "\"added-rows-count\":10,\"existing-rows-count\":30,\"deleted-rows-count\":0,"
         + "\"partition-field-summary\":[{\"contains-null\":true,\"contains-nan\":false,"
         + "\"lower-bound\":\"0A000000\",\"upper-bound\":\"64000000\"}],"
-        + "\"key-metadata\":\"DB030000\",\"first-row-id\":10}";
+        + "\"key-metadata\":\"DB030000\",\"first-row-id\":10,\"commit-timestamp-ms\":1234567890}";
   }
 }

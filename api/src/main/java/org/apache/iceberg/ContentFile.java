@@ -168,6 +168,18 @@ public interface ContentFile<F> {
   }
 
   /**
+   * Returns the commit timestamp in milliseconds for this file.
+   *
+   * <p>The commit timestamp represents the snapshot timestamp of the commit that added the file. It
+   * is used for inheriting {@code _last_updated_timestamp_ms} in V4 tables.
+   *
+   * <p>This method can return null if the commit timestamp is unknown.
+   */
+  default Long commitTimestampMs() {
+    return null;
+  }
+
+  /**
    * Returns the starting row ID to assign to new rows in the data file (with _row_id set to null).
    */
   default Long firstRowId() {
