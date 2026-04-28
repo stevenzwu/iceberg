@@ -2151,9 +2151,7 @@ public class TestRewriteDataFilesAction extends TestBase {
                 .selectExpr("_row_id", "_last_updated_timestamp_ms", "*")
                 .collectAsList());
     assertEquals(
-        "Compaction must preserve per-row _last_updated_timestamp_ms",
-        beforeRewrite,
-        afterRewrite);
+        "Compaction must preserve per-row _last_updated_timestamp_ms", beforeRewrite, afterRewrite);
     assertThat(afterRewrite)
         .as("Post-rewrite rows must NOT inherit the rewrite snapshot's commit timestamp")
         .allMatch(record -> rewriteCommitTs != (Long) record[1]);

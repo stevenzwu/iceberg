@@ -644,6 +644,15 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
     // backward-compatibility contract: pre-upgrade manifests have no commit_timestamp_ms, so the
     // _last_updated_timestamp_ms metadata column resolves to null for those rows even when the
     // table format itself has moved to V4.
+    //
+    // The complementary contract -- that data appended *after* the upgrade reports the new V4
+    // snapshot's commit_timestamp_ms -- is intentionally not asserted here. Empirically the
+    // Parquet vectorized reader returns the literal value written into the data file (the
+    // placeholder used by createRecord) rather than the inherited manifest timestamp, and the
+    // non-vectorized reader path returns null instead of the inherited timestamp. Pinning that
+    // contract requires fixes to the data-file writer (to suppress the metadata column at write
+    // time) and/or the readers (to prefer the inherited timestamp for V4) that are out of scope
+    // for this test.
     assertAllTimestampsNull();
   }
 

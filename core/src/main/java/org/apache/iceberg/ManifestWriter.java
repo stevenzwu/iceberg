@@ -155,16 +155,11 @@ public abstract class ManifestWriter<F extends ContentFile<F>> implements FileAp
   }
 
   void add(ManifestEntry<F> entry) {
-    if (entry.dataSequenceNumber() != null && entry.dataSequenceNumber() >= 0) {
-      addEntry(
-          reused.wrapAppend(
-              snapshotId,
-              entry.dataSequenceNumber(),
-              entry.commitTimestampMs(),
-              entry.file()));
-    } else {
-      addEntry(reused.wrapAppend(snapshotId, null, entry.commitTimestampMs(), entry.file()));
-    }
+    Long dataSeqNumber =
+        (entry.dataSequenceNumber() != null && entry.dataSequenceNumber() >= 0)
+            ? entry.dataSequenceNumber()
+            : null;
+    addEntry(reused.wrapAppend(snapshotId, dataSeqNumber, entry.commitTimestampMs(), entry.file()));
   }
 
   /**

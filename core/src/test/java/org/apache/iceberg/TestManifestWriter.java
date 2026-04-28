@@ -355,7 +355,8 @@ public class TestManifestWriter extends TestBase {
     }
 
     try (ManifestReader<DeleteFile> reader =
-        ManifestFiles.readDeleteManifest(deleteWriter.toManifestFile(), table.io(), table.specs())) {
+        ManifestFiles.readDeleteManifest(
+            deleteWriter.toManifestFile(), table.io(), table.specs())) {
       for (ManifestEntry<DeleteFile> entry : reader.entries()) {
         assertThat(entry.commitTimestampMs())
             .as("Deprecated overloads must default commit_timestamp_ms to null")
@@ -371,8 +372,7 @@ public class TestManifestWriter extends TestBase {
 
     RollingManifestWriter<DataFile> dataWriter =
         new RollingManifestWriter<>(
-            () -> ManifestFiles.write(formatVersion, SPEC, newManifestFile(), 1L),
-            SMALL_FILE_SIZE);
+            () -> ManifestFiles.write(formatVersion, SPEC, newManifestFile(), 1L), SMALL_FILE_SIZE);
     dataWriter.existing(newFile(1), 1L, 2L, 3L);
     dataWriter.delete(newFile(2), 2L, 3L);
     dataWriter.close();
