@@ -44,6 +44,7 @@ import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.SnapshotRef;
 import org.apache.iceberg.StructLike;
 import org.apache.iceberg.Table;
+import org.apache.iceberg.TableUtil;
 import org.apache.iceberg.TestHelpers;
 import org.apache.iceberg.data.GenericFileWriterFactory;
 import org.apache.iceberg.data.GenericRecord;
@@ -354,6 +355,8 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
               row(2L, updateTimestamp),
               row(3L, appendTimestamp),
               row(4L, appendTimestamp)));
+    } else {
+      assertAllTimestampsNull();
     }
   }
 
@@ -458,6 +461,11 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
             row(103, "d", 3L, 1L),
             row(104, "e", 4L, 1L)),
         rowsWithLineage());
+
+    if (formatVersion < 4) {
+      assertAllTimestampsNull();
+      return;
+    }
 
     if (formatVersion >= 4) {
       long updateTimestamp = updateSnapshot.timestampMillis();
@@ -586,6 +594,57 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
     List<Object[]> actual =
         sql("SELECT _row_id, _last_updated_timestamp_ms FROM %s ORDER BY _row_id", selectTarget());
     assertEquals("Rows should have expected timestamps", expected, actual);
+  }
+
+  /**
+   * Verifies that every row in the table has a {@code null} {@code _last_updated_timestamp_ms}.
+   * Used to assert the V3 (and earlier) contract: the metadata column is exposed but always null
+   * because pre-V4 manifests do not record a commit timestamp.
+   */
+  private void assertAllTimestampsNull() {
+    List<Object[]> actual = sql("SELECT _last_updated_timestamp_ms FROM %s", selectTarget());
+    for (Object[] r : actual) {
+      assertThat(r[0])
+          .as("Pre-V4 tables must expose null _last_updated_timestamp_ms for every row")
+          .isNull();
+    }
+  }
+
+  @TestTemplate
+  public void testV3ToV4UpgradePreservesPreUpgradeNullTimestamp()
+      throws NoSuchTableException, ParseException, IOException {
+    // The base parameterization for this suite already covers V3 and V4 separately. Run the
+    // upgrade scenario only when the table starts at V3 to avoid duplicating the assertion under
+    // the V4 parameter (where the table is created at V4 and there is nothing to upgrade).
+    assumeThat(formatVersion).isEqualTo(3);
+    // The session catalog parameterization re-creates the table on each operation in a way that
+    // makes the explicit upgrade contract under test below fragile. Restrict to the hadoop catalog.
+    assumeThat(catalogName).isEqualTo("testhadoop");
+    // The branch variant routes writes through createBranchIfNeeded(), which complicates the
+    // pre-upgrade vs. post-upgrade snapshot bookkeeping. Restrict to the main branch so we can
+    // assert against currentSnapshot() directly.
+    assumeThat(branch).isNull();
+
+    createAndInitTable("id INT, data STRING", null);
+    Table table = loadIcebergTable(spark, tableName);
+    appendUnpartitionedRecords(table, INITIAL_RECORDS);
+
+    // Pre-upgrade: V3 manifests must not carry commit_timestamp_ms; the row-level metadata
+    // column must therefore be null for every row.
+    assertAllTimestampsNull();
+
+    // Upgrade the table format to V4. New snapshots written from this point on must carry
+    // commit_timestamp_ms; previously committed manifests must continue to read as null because
+    // the V3 manifests in the manifest list have no commit_timestamp_ms to inherit.
+    sql("ALTER TABLE %s SET TBLPROPERTIES('format-version' '4')", tableName);
+    table.refresh();
+    assertThat(TableUtil.formatVersion(table)).as("Table should be upgraded to V4").isEqualTo(4);
+
+    // The pre-upgrade rows must STILL read as null after the upgrade. This is the V3-to-V4
+    // backward-compatibility contract: pre-upgrade manifests have no commit_timestamp_ms, so the
+    // _last_updated_timestamp_ms metadata column resolves to null for those rows even when the
+    // table format itself has moved to V4.
+    assertAllTimestampsNull();
   }
 
   /**

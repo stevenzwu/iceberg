@@ -140,6 +140,7 @@ public class TestRowLineageAssignment {
       assertThat(manifest.commitTimestampMs())
           .as("Pre-V4 manifest should have null commit_timestamp_ms")
           .isNull();
+      checkDataFileCommitTimestamp(table, manifest, (Long) null);
     }
   }
 

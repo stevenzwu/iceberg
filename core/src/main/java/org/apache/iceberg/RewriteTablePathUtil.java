@@ -490,7 +490,15 @@ public class RewriteTablePathUtil {
 
     switch (entry.status()) {
       case ADDED:
-        writer.add(file);
+        // Preserve the original data sequence number and commit timestamp on ADDED entries so
+        // they survive a manifest rewrite even when read directly (without going through the
+        // manifest list inheritance path). For V1 manifests dataSequenceNumber may be null; fall
+        // back to the simple add() in that case.
+        if (entry.dataSequenceNumber() != null) {
+          writer.add(file, entry.dataSequenceNumber(), entry.commitTimestampMs());
+        } else {
+          writer.add(file);
+        }
         break;
       case EXISTING:
         writer.existing(

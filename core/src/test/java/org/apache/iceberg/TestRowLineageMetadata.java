@@ -435,8 +435,14 @@ public class TestRowLineageMetadata {
       checkEntryCommitTimestamp(table, manifests.get(0), secondTimestamp);
       checkEntryCommitTimestamp(table, manifests.get(1), firstTimestamp);
     } else {
-      assertThat(manifests.get(0).commitTimestampMs()).isNull();
-      assertThat(manifests.get(1).commitTimestampMs()).isNull();
+      assertThat(manifests.get(0).commitTimestampMs())
+          .as("Pre-V4 manifests must not carry commit_timestamp_ms")
+          .isNull();
+      assertThat(manifests.get(1).commitTimestampMs())
+          .as("Pre-V4 manifests must not carry commit_timestamp_ms")
+          .isNull();
+      checkEntryCommitTimestamp(table, manifests.get(0), null);
+      checkEntryCommitTimestamp(table, manifests.get(1), null);
     }
   }
 
@@ -464,7 +470,10 @@ public class TestRowLineageMetadata {
       }
     } else {
       for (ManifestFile manifest : manifests) {
-        assertThat(manifest.commitTimestampMs()).isNull();
+        assertThat(manifest.commitTimestampMs())
+            .as("Pre-V4 rewrite manifest must not carry commit_timestamp_ms")
+            .isNull();
+        checkEntryCommitTimestamp(table, manifest, null);
       }
     }
   }

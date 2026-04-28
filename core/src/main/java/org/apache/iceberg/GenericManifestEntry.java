@@ -79,15 +79,23 @@ class GenericManifestEntry<F extends ContentFile<F>>
   }
 
   ManifestEntry<F> wrapAppend(Long newSnapshotId, F newFile) {
-    return wrapAppend(newSnapshotId, null, newFile);
+    return wrapAppend(newSnapshotId, null, null, newFile);
   }
 
   ManifestEntry<F> wrapAppend(Long newSnapshotId, Long newDataSequenceNumber, F newFile) {
+    return wrapAppend(newSnapshotId, newDataSequenceNumber, null, newFile);
+  }
+
+  ManifestEntry<F> wrapAppend(
+      Long newSnapshotId,
+      Long newDataSequenceNumber,
+      Long newCommitTimestampMs,
+      F newFile) {
     this.status = Status.ADDED;
     this.snapshotId = newSnapshotId;
     this.dataSequenceNumber = newDataSequenceNumber;
     this.fileSequenceNumber = null;
-    this.commitTimestampMs = null;
+    this.commitTimestampMs = newCommitTimestampMs;
     this.file = Delegates.suppressFirstRowId(newFile);
     return this;
   }

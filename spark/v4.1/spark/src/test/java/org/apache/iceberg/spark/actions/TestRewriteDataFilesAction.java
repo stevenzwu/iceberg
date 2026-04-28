@@ -2100,6 +2100,66 @@ public class TestRewriteDataFilesAction extends TestBase {
   }
 
   @TestTemplate
+  public void testRewriteDataFilesPreservesV4CommitTimestamp() throws NoSuchTableException {
+    // Compaction must preserve per-row _last_updated_timestamp_ms across rewrites for V4 tables;
+    // collapsing it to the rewrite snapshot's commit timestamp would defeat the purpose of the
+    // V4 commit_timestamp_ms feature. SparkRewriteTable already projects the V3 row-lineage
+    // columns via MetadataColumns.schemaWithRowLineage, which since V4 also includes
+    // _last_updated_timestamp_ms; this test pins that contract.
+    assumeThat(formatVersion).isGreaterThanOrEqualTo(4);
+
+    Table table = createTablePartitioned(4 /* partitions */, 2 /* files per partition */);
+    shouldHaveFiles(table, 8);
+
+    long initialCommitTs = table.currentSnapshot().timestampMillis();
+    List<Object[]> beforeRewrite =
+        rowsToJava(
+            spark
+                .read()
+                .format("iceberg")
+                .option(SparkReadOptions.SPLIT_SIZE, 1024 * 1024 * 64)
+                .option(SparkReadOptions.FILE_OPEN_COST, 0)
+                .load(tableLocation)
+                .coalesce(1)
+                .sort("_row_id")
+                .selectExpr("_row_id", "_last_updated_timestamp_ms", "*")
+                .collectAsList());
+    assertThat(beforeRewrite)
+        .as("Pre-rewrite rows should report the initial commit timestamp")
+        .allMatch(record -> initialCommitTs == (Long) record[1]);
+
+    Result result = basicRewrite(table).execute();
+    assertThat(result.rewrittenDataFilesCount()).isEqualTo(8);
+    assertThat(result.addedDataFilesCount()).isEqualTo(4);
+
+    table.refresh();
+    long rewriteCommitTs = table.currentSnapshot().timestampMillis();
+    assertThat(rewriteCommitTs)
+        .as("Sanity: rewrite must produce a strictly later snapshot timestamp")
+        .isGreaterThan(initialCommitTs);
+
+    List<Object[]> afterRewrite =
+        rowsToJava(
+            spark
+                .read()
+                .format("iceberg")
+                .option(SparkReadOptions.SPLIT_SIZE, 1024 * 1024 * 64)
+                .option(SparkReadOptions.FILE_OPEN_COST, 0)
+                .load(tableLocation)
+                .coalesce(1)
+                .sort("_row_id")
+                .selectExpr("_row_id", "_last_updated_timestamp_ms", "*")
+                .collectAsList());
+    assertEquals(
+        "Compaction must preserve per-row _last_updated_timestamp_ms",
+        beforeRewrite,
+        afterRewrite);
+    assertThat(afterRewrite)
+        .as("Post-rewrite rows must NOT inherit the rewrite snapshot's commit timestamp")
+        .allMatch(record -> rewriteCommitTs != (Long) record[1]);
+  }
+
+  @TestTemplate
   public void testExecutorCacheForDeleteFilesDisabled() {
     Table table = createTablePartitioned(1, 1);
     RewriteDataFilesSparkAction action = SparkActions.get(spark).rewriteDataFiles(table);

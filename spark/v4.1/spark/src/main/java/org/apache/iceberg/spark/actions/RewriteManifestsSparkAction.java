@@ -264,12 +264,18 @@ public class RewriteManifestsSparkAction
                 "snapshot_id",
                 "sequence_number",
                 "file_sequence_number",
-                "data_file");
+                "data_file",
+                "commit_timestamp_ms");
 
     Column joinCond = manifestDF.col("manifest").equalTo(manifestEntryDF.col("manifest"));
     return manifestEntryDF
         .join(manifestDF, joinCond, "left_semi")
-        .select("snapshot_id", "sequence_number", "file_sequence_number", "data_file");
+        .select(
+            "snapshot_id",
+            "sequence_number",
+            "file_sequence_number",
+            "data_file",
+            "commit_timestamp_ms");
   }
 
   private List<ManifestFile> writeUnpartitionedManifests(
@@ -523,8 +529,13 @@ public class RewriteManifestsSparkAction
           long sequenceNumber = row.getLong(1);
           Long fileSequenceNumber = row.isNullAt(2) ? null : row.getLong(2);
           Row file = row.getStruct(3);
+          Long commitTimestampMs = row.isNullAt(4) ? null : row.getLong(4);
           writer.existing(
-              fileWrapper.wrap(file), snapshotId, sequenceNumber, fileSequenceNumber, null);
+              fileWrapper.wrap(file),
+              snapshotId,
+              sequenceNumber,
+              fileSequenceNumber,
+              commitTimestampMs);
         }
       } finally {
         writer.close();

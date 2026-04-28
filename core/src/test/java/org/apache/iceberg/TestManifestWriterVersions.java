@@ -325,10 +325,13 @@ public class TestManifestWriterVersions {
         FileContent.DATA,
         FIRST_ROW_ID);
 
-    // before manifest list inheritance, the entry inherits UNASSIGNED_TS from the manifest
+    // before manifest list inheritance, the entry's commit_timestamp_ms is null:
+    // ADDED entries are persisted with a null commit_timestamp_ms by ManifestWriter#add, and
+    // InheritableMetadataFactory normalizes UNASSIGNED_TS on the manifest to null so the sentinel
+    // does not leak into entries that are read directly (without going through a manifest list).
     assertThat(entry.commitTimestampMs())
-        .as("Entry commit_timestamp_ms should be unassigned before manifest list write")
-        .isEqualTo(ManifestWriter.UNASSIGNED_TS);
+        .as("Entry commit_timestamp_ms should be null before manifest list write")
+        .isNull();
   }
 
   @Test

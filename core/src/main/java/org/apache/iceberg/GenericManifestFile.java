@@ -454,6 +454,7 @@ public class GenericManifestFile extends SupportsIndexProjection
         .add("sequence_number", sequenceNumber)
         .add("min_sequence_number", minSequenceNumber)
         .add("first_row_id", firstRowId)
+        .add("commit_timestamp_ms", commitTimestampMs)
         .toString();
   }
 
