@@ -18,37 +18,26 @@
  */
 package org.apache.iceberg.gcp.gcs;
 
-import com.google.cloud.gcs.analyticscore.client.GcsFileSystem;
 import com.google.cloud.storage.BlobId;
-import com.google.cloud.storage.Storage;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import org.apache.iceberg.exceptions.AlreadyExistsException;
-import org.apache.iceberg.gcp.GCPProperties;
 import org.apache.iceberg.io.InputFile;
 import org.apache.iceberg.io.OutputFile;
 import org.apache.iceberg.io.PositionOutputStream;
 import org.apache.iceberg.metrics.MetricsContext;
 
 class GCSOutputFile extends BaseGCSFile implements OutputFile {
+  private final PrefixedStorage prefixedStorage;
 
   static GCSOutputFile fromLocation(
       String location, PrefixedStorage storage, MetricsContext metrics) {
-    return new GCSOutputFile(
-        storage.storage(),
-        storage.gcsFileSystem(),
-        BlobId.fromGsUtilUri(location),
-        storage.gcpProperties(),
-        metrics);
+    return new GCSOutputFile(storage, BlobId.fromGsUtilUri(location), metrics);
   }
 
-  GCSOutputFile(
-      Storage storage,
-      GcsFileSystem gcsFileSystem,
-      BlobId blobId,
-      GCPProperties gcpProperties,
-      MetricsContext metrics) {
-    super(storage, gcsFileSystem, blobId, gcpProperties, metrics);
+  GCSOutputFile(PrefixedStorage prefixedStorage, BlobId blobId, MetricsContext metrics) {
+    super(prefixedStorage.storage(), blobId, prefixedStorage.gcpProperties(), metrics);
+    this.prefixedStorage = prefixedStorage;
   }
 
   /**
@@ -77,6 +66,6 @@ class GCSOutputFile extends BaseGCSFile implements OutputFile {
 
   @Override
   public InputFile toInputFile() {
-    return new GCSInputFile(storage(), gcsFileSystem(), blobId(), null, gcpProperties(), metrics());
+    return new GCSInputFile(prefixedStorage, blobId(), null, gcpProperties(), metrics());
   }
 }

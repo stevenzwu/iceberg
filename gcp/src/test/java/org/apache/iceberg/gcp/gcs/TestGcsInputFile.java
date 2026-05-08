@@ -20,23 +20,17 @@ package org.apache.iceberg.gcp.gcs;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockConstruction;
-import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.google.cloud.gcs.analyticscore.client.GcsFileInfo;
-import com.google.cloud.gcs.analyticscore.client.GcsFileSystem;
-import com.google.cloud.gcs.analyticscore.client.GcsItemId;
-import com.google.cloud.gcs.analyticscore.client.GcsItemInfo;
-import com.google.cloud.gcs.analyticscore.core.GcsAnalyticsCoreOptions;
-import com.google.cloud.gcs.analyticscore.core.GoogleCloudStorageInputStream;
 import com.google.cloud.storage.Blob;
 import com.google.cloud.storage.BlobId;
 import com.google.cloud.storage.Storage;
 import java.io.IOException;
-import java.net.URI;
-import java.util.Collections;
 import org.apache.iceberg.gcp.GCPProperties;
 import org.apache.iceberg.io.SeekableInputStream;
 import org.apache.iceberg.metrics.MetricsContext;
@@ -44,7 +38,6 @@ import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedConstruction;
-import org.mockito.MockedStatic;
 
 public class TestGcsInputFile {
 
@@ -54,8 +47,7 @@ public class TestGcsInputFile {
   private static final long FILE_SIZE = 1024L;
 
   private Storage storage;
-  private GcsFileSystem gcsFileSystem;
-  private GcsAnalyticsCoreOptions gcsAnalyticsCoreOptions;
+  private GcsAnalyticsCoreSupport analyticsCoreSupport;
   private PrefixedStorage prefixedStorage;
   private GCPProperties gcpProperties;
   private MetricsContext metricsContext;
@@ -64,17 +56,14 @@ public class TestGcsInputFile {
   @BeforeEach
   public void before() {
     storage = mock(Storage.class);
-    gcsFileSystem = mock(GcsFileSystem.class);
+    analyticsCoreSupport = mock(GcsAnalyticsCoreSupport.class);
     prefixedStorage = mock(PrefixedStorage.class);
-    gcsAnalyticsCoreOptions = new GcsAnalyticsCoreOptions("", Collections.emptyMap());
     gcpProperties = new GCPProperties();
     metricsContext = MetricsContext.nullMetrics();
     blob = mock(Blob.class);
     when(prefixedStorage.storage()).thenReturn(storage);
-    when(prefixedStorage.gcsFileSystem()).thenReturn(gcsFileSystem);
+    when(prefixedStorage.analyticsCoreSupport()).thenReturn(analyticsCoreSupport);
     when(prefixedStorage.gcpProperties()).thenReturn(gcpProperties);
-    when(gcsFileSystem.getFileSystemOptions())
-        .thenReturn(gcsAnalyticsCoreOptions.getGcsFileSystemOptions());
     when(storage.get(any(BlobId.class))).thenReturn(blob);
     when(blob.getSize()).thenReturn(FILE_SIZE);
   }
@@ -101,12 +90,7 @@ public class TestGcsInputFile {
     when(blob.getSize()).thenReturn(FILE_SIZE);
     GCSInputFile inputFile =
         new GCSInputFile(
-            storage,
-            gcsFileSystem,
-            BlobId.fromGsUtilUri(LOCATION),
-            null,
-            gcpProperties,
-            metricsContext);
+            prefixedStorage, BlobId.fromGsUtilUri(LOCATION), null, gcpProperties, metricsContext);
 
     assertThat(inputFile.getLength()).isEqualTo(FILE_SIZE);
   }
@@ -115,8 +99,7 @@ public class TestGcsInputFile {
   public void getLengthCached() {
     GCSInputFile inputFile =
         new GCSInputFile(
-            storage,
-            gcsFileSystem,
+            prefixedStorage,
             BlobId.fromGsUtilUri(LOCATION),
             FILE_SIZE,
             gcpProperties,
@@ -130,37 +113,17 @@ public class TestGcsInputFile {
     GCPProperties enabledGcpProperties =
         new GCPProperties(ImmutableMap.of(GCPProperties.GCS_ANALYTICS_CORE_ENABLED, "true"));
     BlobId blobId = BlobId.fromGsUtilUri(LOCATION);
-    GcsItemId itemId =
-        GcsItemId.builder()
-            .setBucketName(blobId.getBucket())
-            .setObjectName(blobId.getName())
-            .build();
-    GcsItemInfo itemInfo = GcsItemInfo.builder().setItemId(itemId).setSize(FILE_SIZE).build();
-    GcsFileInfo gcsFileInfo =
-        GcsFileInfo.builder()
-            .setItemInfo(itemInfo)
-            .setUri(URI.create(LOCATION))
-            .setAttributes(ImmutableMap.of())
-            .build();
-    try (MockedStatic<GoogleCloudStorageInputStream> mocked =
-        mockStatic(GoogleCloudStorageInputStream.class)) {
-      mocked
-          .when(() -> GoogleCloudStorageInputStream.create(gcsFileSystem, gcsFileInfo))
-          .thenReturn(mock(GoogleCloudStorageInputStream.class));
+    SeekableInputStream wrapper = mock(SeekableInputStream.class);
+    when(analyticsCoreSupport.newInputStream(eq(blobId), eq(FILE_SIZE), eq(metricsContext)))
+        .thenReturn(wrapper);
 
-      GCSInputFile inputFile =
-          new GCSInputFile(
-              storage,
-              gcsFileSystem,
-              BlobId.fromGsUtilUri(LOCATION),
-              FILE_SIZE,
-              enabledGcpProperties,
-              metricsContext);
+    GCSInputFile inputFile =
+        new GCSInputFile(prefixedStorage, blobId, FILE_SIZE, enabledGcpProperties, metricsContext);
 
-      try (SeekableInputStream stream = inputFile.newStream()) {
-        assertThat(stream).isInstanceOf(GcsInputStreamWrapper.class);
-      }
+    try (SeekableInputStream stream = inputFile.newStream()) {
+      assertThat(stream).isSameAs(wrapper);
     }
+    verify(analyticsCoreSupport).newInputStream(blobId, FILE_SIZE, metricsContext);
   }
 
   @Test
@@ -168,38 +131,24 @@ public class TestGcsInputFile {
     GCPProperties enabledGcpProperties =
         new GCPProperties(ImmutableMap.of(GCPProperties.GCS_ANALYTICS_CORE_ENABLED, "true"));
     BlobId blobId = BlobId.fromGsUtilUri(LOCATION);
-    GcsItemId itemId =
-        GcsItemId.builder()
-            .setBucketName(blobId.getBucket())
-            .setObjectName(blobId.getName())
-            .build();
-    try (MockedStatic<GoogleCloudStorageInputStream> mocked =
-        mockStatic(GoogleCloudStorageInputStream.class)) {
-      mocked
-          .when(() -> GoogleCloudStorageInputStream.create(gcsFileSystem, itemId))
-          .thenReturn(mock(GoogleCloudStorageInputStream.class));
+    SeekableInputStream wrapper = mock(SeekableInputStream.class);
+    when(analyticsCoreSupport.newInputStream(eq(blobId), eq(null), eq(metricsContext)))
+        .thenReturn(wrapper);
 
-      GCSInputFile inputFile =
-          new GCSInputFile(
-              storage,
-              gcsFileSystem,
-              BlobId.fromGsUtilUri(LOCATION),
-              null,
-              enabledGcpProperties,
-              metricsContext);
+    GCSInputFile inputFile =
+        new GCSInputFile(prefixedStorage, blobId, null, enabledGcpProperties, metricsContext);
 
-      try (SeekableInputStream stream = inputFile.newStream()) {
-        assertThat(stream).isInstanceOf(GcsInputStreamWrapper.class);
-      }
+    try (SeekableInputStream stream = inputFile.newStream()) {
+      assertThat(stream).isSameAs(wrapper);
     }
+    verify(analyticsCoreSupport).newInputStream(blobId, null, metricsContext);
   }
 
   @Test
   public void newStreamGcsAnalyticsCoreDisabled() throws IOException {
     GCSInputFile inputFile =
         new GCSInputFile(
-            storage,
-            gcsFileSystem,
+            prefixedStorage,
             BlobId.fromGsUtilUri(LOCATION),
             FILE_SIZE,
             gcpProperties,
@@ -228,43 +177,27 @@ public class TestGcsInputFile {
     GCPProperties enabledGcpProperties =
         new GCPProperties(ImmutableMap.of(GCPProperties.GCS_ANALYTICS_CORE_ENABLED, "true"));
     BlobId blobId = BlobId.fromGsUtilUri(LOCATION);
-    GcsItemId itemId =
-        GcsItemId.builder()
-            .setBucketName(blobId.getBucket())
-            .setObjectName(blobId.getName())
-            .build();
+    when(analyticsCoreSupport.newInputStream(eq(blobId), any(), eq(metricsContext)))
+        .thenThrow(new IOException("GCS connector failed"));
 
-    try (MockedStatic<GoogleCloudStorageInputStream> mocked =
-        mockStatic(GoogleCloudStorageInputStream.class)) {
-      mocked
-          .when(() -> GoogleCloudStorageInputStream.create(gcsFileSystem, itemId))
-          .thenThrow(new IOException("GCS connector failed"));
-
-      GCSInputFile inputFile =
-          new GCSInputFile(
-              storage,
-              gcsFileSystem,
-              BlobId.fromGsUtilUri(LOCATION),
-              null,
-              enabledGcpProperties,
-              metricsContext);
-      try (MockedConstruction<GCSInputStream> inputStreamMocked =
-          mockConstruction(
-              GCSInputStream.class,
-              (mock, context) -> {
-                assertThat(context.arguments()).hasSize(5);
-                assertThat(context.arguments().get(0)).isEqualTo(storage);
-                assertThat(context.arguments().get(1)).isEqualTo(BlobId.fromGsUtilUri(LOCATION));
-                assertThat(context.arguments().get(2)).isEqualTo(null);
-                assertThat(context.arguments().get(3)).isEqualTo(enabledGcpProperties);
-                assertThat(context.arguments().get(4)).isEqualTo(metricsContext);
-              })) {
-        SeekableInputStream stream = inputFile.newStream();
-        assertThat(stream).isInstanceOf(GCSInputStream.class);
-        assertThat(inputStreamMocked.constructed()).hasSize(1);
-        mocked.verify(() -> GoogleCloudStorageInputStream.create(gcsFileSystem, itemId));
-        stream.close();
-      }
+    GCSInputFile inputFile =
+        new GCSInputFile(prefixedStorage, blobId, null, enabledGcpProperties, metricsContext);
+    try (MockedConstruction<GCSInputStream> inputStreamMocked =
+        mockConstruction(
+            GCSInputStream.class,
+            (mock, context) -> {
+              assertThat(context.arguments()).hasSize(5);
+              assertThat(context.arguments().get(0)).isEqualTo(storage);
+              assertThat(context.arguments().get(1)).isEqualTo(BlobId.fromGsUtilUri(LOCATION));
+              assertThat(context.arguments().get(2)).isEqualTo(null);
+              assertThat(context.arguments().get(3)).isEqualTo(enabledGcpProperties);
+              assertThat(context.arguments().get(4)).isEqualTo(metricsContext);
+            })) {
+      SeekableInputStream stream = inputFile.newStream();
+      assertThat(stream).isInstanceOf(GCSInputStream.class);
+      assertThat(inputStreamMocked.constructed()).hasSize(1);
+      verify(analyticsCoreSupport, times(1)).newInputStream(blobId, null, metricsContext);
+      stream.close();
     }
   }
 }

@@ -23,10 +23,6 @@ import com.google.auth.Credentials;
 import com.google.auth.oauth2.GoogleCredentials;
 import com.google.auth.oauth2.ImpersonatedCredentials;
 import com.google.cloud.NoCredentials;
-import com.google.cloud.gcs.analyticscore.client.GcsFileSystem;
-import com.google.cloud.gcs.analyticscore.client.GcsFileSystemImpl;
-import com.google.cloud.gcs.analyticscore.client.GcsFileSystemOptions;
-import com.google.cloud.gcs.analyticscore.core.GcsAnalyticsCoreOptions;
 import com.google.cloud.storage.Storage;
 import com.google.cloud.storage.StorageOptions;
 import java.io.IOException;
@@ -45,11 +41,11 @@ class PrefixedStorage implements AutoCloseable {
   private static final String GCS_FILE_IO_USER_AGENT = "gcsfileio/" + EnvironmentContext.get();
   private final String storagePrefix;
   private final GCPProperties gcpProperties;
+  private final Map<String, String> rawProperties;
   private SerializableSupplier<Storage> storage;
   private CloseableGroup closeableGroup;
   private transient volatile Storage storageClient;
-  private final SerializableSupplier<GcsFileSystem> gcsFileSystemSupplier;
-  private transient volatile GcsFileSystem gcsFileSystem;
+  private transient volatile GcsAnalyticsCoreSupport analyticsCoreSupport;
 
   PrefixedStorage(
       String storagePrefix, Map<String, String> properties, SerializableSupplier<Storage> storage) {
@@ -59,6 +55,7 @@ class PrefixedStorage implements AutoCloseable {
     this.storagePrefix = storagePrefix;
     this.storage = storage;
     this.gcpProperties = new GCPProperties(properties);
+    this.rawProperties = properties;
     this.closeableGroup = new CloseableGroup();
     if (null == storage) {
       this.storage =
@@ -81,8 +78,6 @@ class PrefixedStorage implements AutoCloseable {
             return builder.build().getService();
           };
     }
-
-    this.gcsFileSystemSupplier = gcsFileSystemSupplier(properties);
   }
 
   public String storagePrefix() {
@@ -121,17 +116,19 @@ class PrefixedStorage implements AutoCloseable {
     }
   }
 
-  GcsFileSystem gcsFileSystem() {
-    if (gcsFileSystem == null) {
+  GcsAnalyticsCoreSupport analyticsCoreSupport() {
+    if (analyticsCoreSupport == null) {
       synchronized (this) {
-        if (gcsFileSystem == null) {
-          this.gcsFileSystem = gcsFileSystemSupplier.get();
-          this.closeableGroup.addCloseable(gcsFileSystem);
+        if (analyticsCoreSupport == null) {
+          this.analyticsCoreSupport =
+              new GcsAnalyticsCoreSupport(
+                  rawProperties, credentials(gcpProperties), GCS_FILE_IO_USER_AGENT);
+          this.closeableGroup.addCloseable(analyticsCoreSupport);
         }
       }
     }
 
-    return this.gcsFileSystem;
+    return this.analyticsCoreSupport;
   }
 
   private Credentials credentials(GCPProperties properties) {
@@ -168,21 +165,5 @@ class PrefixedStorage implements AutoCloseable {
     } catch (IOException e) {
       throw new UncheckedIOException("Failed to create impersonated credentials for GCS", e);
     }
-  }
-
-  private SerializableSupplier<GcsFileSystem> gcsFileSystemSupplier(
-      Map<String, String> properties) {
-    ImmutableMap.Builder<String, String> propertiesWithUserAgent =
-        new ImmutableMap.Builder<String, String>()
-            .putAll(properties)
-            .put("gcs.user-agent", GCS_FILE_IO_USER_AGENT);
-    GcsAnalyticsCoreOptions gcsAnalyticsCoreOptions =
-        new GcsAnalyticsCoreOptions("gcs.", propertiesWithUserAgent.build());
-    GcsFileSystemOptions fileSystemOptions = gcsAnalyticsCoreOptions.getGcsFileSystemOptions();
-    Credentials credentials = credentials(new GCPProperties(properties));
-    return () ->
-        credentials == null
-            ? new GcsFileSystemImpl(fileSystemOptions)
-            : new GcsFileSystemImpl(credentials, fileSystemOptions);
   }
 }

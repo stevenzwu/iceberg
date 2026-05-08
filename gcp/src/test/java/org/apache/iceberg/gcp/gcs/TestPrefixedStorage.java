@@ -144,7 +144,7 @@ public class TestPrefixedStorage {
                     .build())
             .build();
 
-    GcsFileSystem fileSystem = storage.gcsFileSystem();
+    GcsFileSystem fileSystem = storage.analyticsCoreSupport().gcsFileSystem();
 
     assertThat(fileSystem).isNotNull();
     assertThat(fileSystem.getGcsClient()).isNotNull();
