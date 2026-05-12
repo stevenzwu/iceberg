@@ -81,13 +81,18 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
               MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER,
               MetadataColumns.LAST_UPDATED_TIMESTAMP_MS));
 
+  // The records below simulate freshly inserted rows: _last_updated_timestamp_ms is left null so
+  // that on read it inherits commit_timestamp_ms from the manifest entry (the V4 contract). The
+  // _row_id and _last_updated_sequence_number fields are still populated explicitly because the
+  // tests rely on specific values for those columns; the readers always prefer a non-null row-level
+  // value, so the literal values flow through unchanged.
   static final List<Record> INITIAL_RECORDS =
       ImmutableList.of(
-          createRecord(SCHEMA, 100, "a", 0L, 1L, 0L),
-          createRecord(SCHEMA, 101, "b", 1L, 1L, 0L),
-          createRecord(SCHEMA, 102, "c", 2L, 1L, 0L),
-          createRecord(SCHEMA, 103, "d", 3L, 1L, 0L),
-          createRecord(SCHEMA, 104, "e", 4L, 1L, 0L));
+          createRecord(SCHEMA, 100, "a", 0L, 1L, null),
+          createRecord(SCHEMA, 101, "b", 1L, 1L, null),
+          createRecord(SCHEMA, 102, "c", 2L, 1L, null),
+          createRecord(SCHEMA, 103, "d", 3L, 1L, null),
+          createRecord(SCHEMA, 104, "e", 4L, 1L, null));
 
   @Parameters(
       name =
@@ -503,7 +508,7 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
     List<Record> initialRecords = Lists.newArrayList();
     int rowId = 0;
     for (int id = 100; id < startingId + numRecords; id++) {
-      initialRecords.add(createRecord(SCHEMA, id, "data_" + id, rowId++, 1L, 0L));
+      initialRecords.add(createRecord(SCHEMA, id, "data_" + id, rowId++, 1L, null));
     }
 
     appendUnpartitionedRecords(table, initialRecords);
@@ -650,7 +655,7 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
       String data,
       long rowId,
       long lastUpdatedSequenceNumber,
-      long lastUpdatedTimestampMs) {
+      Long lastUpdatedTimestampMs) {
     Record record = GenericRecord.create(schema);
     record.set(0, id);
     record.set(1, data);

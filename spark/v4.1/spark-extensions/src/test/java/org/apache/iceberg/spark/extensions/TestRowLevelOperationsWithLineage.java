@@ -82,13 +82,18 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
               MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER,
               MetadataColumns.LAST_UPDATED_TIMESTAMP_MS));
 
+  // The records below simulate freshly inserted rows: _last_updated_timestamp_ms is left null so
+  // that on read it inherits commit_timestamp_ms from the manifest entry (the V4 contract). The
+  // _row_id and _last_updated_sequence_number fields are still populated explicitly because the
+  // tests rely on specific values for those columns; the readers always prefer a non-null row-level
+  // value, so the literal values flow through unchanged.
   static final List<Record> INITIAL_RECORDS =
       ImmutableList.of(
-          createRecord(SCHEMA, 100, "a", 0L, 1L, 0L),
-          createRecord(SCHEMA, 101, "b", 1L, 1L, 0L),
-          createRecord(SCHEMA, 102, "c", 2L, 1L, 0L),
-          createRecord(SCHEMA, 103, "d", 3L, 1L, 0L),
-          createRecord(SCHEMA, 104, "e", 4L, 1L, 0L));
+          createRecord(SCHEMA, 100, "a", 0L, 1L, null),
+          createRecord(SCHEMA, 101, "b", 1L, 1L, null),
+          createRecord(SCHEMA, 102, "c", 2L, 1L, null),
+          createRecord(SCHEMA, 103, "d", 3L, 1L, null),
+          createRecord(SCHEMA, 104, "e", 4L, 1L, null));
 
   @Parameters(
       name =
@@ -511,7 +516,7 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
     List<Record> initialRecords = Lists.newArrayList();
     int rowId = 0;
     for (int id = 100; id < startingId + numRecords; id++) {
-      initialRecords.add(createRecord(SCHEMA, id, "data_" + id, rowId++, 1L, 0L));
+      initialRecords.add(createRecord(SCHEMA, id, "data_" + id, rowId++, 1L, null));
     }
 
     appendUnpartitionedRecords(table, initialRecords);
@@ -611,7 +616,7 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
   }
 
   @TestTemplate
-  public void testV3ToV4UpgradePreservesPreUpgradeNullTimestamp()
+  public void testV3ToV4UpgradeTimestampInheritance()
       throws NoSuchTableException, ParseException, IOException {
     // The base parameterization for this suite already covers V3 and V4 separately. Run the
     // upgrade scenario only when the table starts at V3 to avoid duplicating the assertion under
@@ -629,31 +634,39 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
     Table table = loadIcebergTable(spark, tableName);
     appendUnpartitionedRecords(table, INITIAL_RECORDS);
 
-    // Pre-upgrade: V3 manifests must not carry commit_timestamp_ms; the row-level metadata
-    // column must therefore be null for every row.
+    // Pre-upgrade: V3 manifests do not carry commit_timestamp_ms, so the metadata column must
+    // read as null for every row regardless of what the data file holds.
     assertAllTimestampsNull();
 
     // Upgrade the table format to V4. New snapshots written from this point on must carry
-    // commit_timestamp_ms; previously committed manifests must continue to read as null because
-    // the V3 manifests in the manifest list have no commit_timestamp_ms to inherit.
+    // commit_timestamp_ms; previously committed manifests continue to read as null because the
+    // V3 manifests in the manifest list have no commit_timestamp_ms to inherit.
     sql("ALTER TABLE %s SET TBLPROPERTIES('format-version' '4')", tableName);
     table.refresh();
     assertThat(TableUtil.formatVersion(table)).as("Table should be upgraded to V4").isEqualTo(4);
 
-    // The pre-upgrade rows must STILL read as null after the upgrade. This is the V3-to-V4
-    // backward-compatibility contract: pre-upgrade manifests have no commit_timestamp_ms, so the
-    // _last_updated_timestamp_ms metadata column resolves to null for those rows even when the
-    // table format itself has moved to V4.
-    //
-    // The complementary contract -- that data appended *after* the upgrade reports the new V4
-    // snapshot's commit_timestamp_ms -- is intentionally not asserted here. Empirically the
-    // Parquet vectorized reader returns the literal value written into the data file (the
-    // placeholder used by createRecord) rather than the inherited manifest timestamp, and the
-    // non-vectorized reader path returns null instead of the inherited timestamp. Pinning that
-    // contract requires fixes to the data-file writer (to suppress the metadata column at write
-    // time) and/or the readers (to prefer the inherited timestamp for V4) that are out of scope
-    // for this test.
-    assertAllTimestampsNull();
+    // Insert a new row via the production Spark write path post-upgrade. The new manifest is
+    // written at V4 and carries commit_timestamp_ms; the reader must inherit that value for the
+    // new row.
+    sql("INSERT INTO %s VALUES (200, 'f')", tableName);
+    table.refresh();
+    long postUpgradeTimestamp = table.currentSnapshot().timestampMillis();
+
+    // The pre-upgrade rows continue to read as null (their V3 manifests have no
+    // commit_timestamp_ms). The post-upgrade row inherits the new V4 snapshot's
+    // commit_timestamp_ms.
+    List<Object[]> actual =
+        sql("SELECT id, _last_updated_timestamp_ms FROM %s ORDER BY id", selectTarget());
+    assertEquals(
+        "Pre-upgrade rows must read null; post-upgrade row must inherit V4 commit_timestamp_ms",
+        ImmutableList.of(
+            row(100, null),
+            row(101, null),
+            row(102, null),
+            row(103, null),
+            row(104, null),
+            row(200, postUpgradeTimestamp)),
+        actual);
   }
 
   /**
@@ -718,7 +731,7 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
       String data,
       long rowId,
       long lastUpdatedSequenceNumber,
-      long lastUpdatedTimestampMs) {
+      Long lastUpdatedTimestampMs) {
     Record record = GenericRecord.create(schema);
     record.set(0, id);
     record.set(1, data);
