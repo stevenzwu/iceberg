@@ -34,10 +34,16 @@ class InheritableMetadataFactory {
     Preconditions.checkArgument(
         manifest.snapshotId() != null,
         "Cannot read from ManifestFile with null (unassigned) snapshot ID");
+    Long commitTs = manifest.commitTimestampMs();
+    if (commitTs != null && commitTs == ManifestWriter.UNASSIGNED_TS) {
+      commitTs = null;
+    }
+
     return new BaseInheritableMetadata(
         manifest.partitionSpecId(),
         manifest.snapshotId(),
         manifest.sequenceNumber(),
+        commitTs,
         manifest.path());
   }
 
@@ -50,13 +56,19 @@ class InheritableMetadataFactory {
     private final int specId;
     private final long snapshotId;
     private final long sequenceNumber;
+    private final Long commitTimestampMs;
     private final String manifestLocation;
 
     private BaseInheritableMetadata(
-        int specId, long snapshotId, long sequenceNumber, String manifestLocation) {
+        int specId,
+        long snapshotId,
+        long sequenceNumber,
+        Long commitTimestampMs,
+        String manifestLocation) {
       this.specId = specId;
       this.snapshotId = snapshotId;
       this.sequenceNumber = sequenceNumber;
+      this.commitTimestampMs = commitTimestampMs;
       this.manifestLocation = manifestLocation;
     }
 
@@ -80,11 +92,19 @@ class InheritableMetadataFactory {
         manifestEntry.setFileSequenceNumber(sequenceNumber);
       }
 
+      // in v4 tables, the commit timestamp is inherited for ADDED entries
+      if (manifestEntry.commitTimestampMs() == null
+          && commitTimestampMs != null
+          && manifestEntry.status() == ManifestEntry.Status.ADDED) {
+        manifestEntry.setCommitTimestampMs(commitTimestampMs);
+      }
+
       if (manifestEntry.file() instanceof BaseFile) {
         BaseFile<?> file = (BaseFile<?>) manifestEntry.file();
         file.setSpecId(specId);
         file.setDataSequenceNumber(manifestEntry.dataSequenceNumber());
         file.setFileSequenceNumber(manifestEntry.fileSequenceNumber());
+        file.setCommitTimestampMs(manifestEntry.commitTimestampMs());
         file.setManifestLocation(manifestLocation);
       }
 

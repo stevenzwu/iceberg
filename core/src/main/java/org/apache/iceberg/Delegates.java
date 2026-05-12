@@ -273,6 +273,11 @@ class Delegates {
     }
 
     @Override
+    public Long commitTimestampMs() {
+      return wrapped.commitTimestampMs();
+    }
+
+    @Override
     public Long firstRowId() {
       return wrapped.firstRowId();
     }

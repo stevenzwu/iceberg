@@ -45,7 +45,8 @@ class V4Metadata {
           ManifestFile.DELETED_ROWS_COUNT.asRequired(),
           ManifestFile.PARTITION_SUMMARIES,
           ManifestFile.KEY_METADATA,
-          ManifestFile.FIRST_ROW_ID);
+          ManifestFile.FIRST_ROW_ID,
+          ManifestFile.COMMIT_TIMESTAMP_MS);
 
   /**
    * A wrapper class to write any ManifestFile implementation to Avro using the v4 write schema.
@@ -56,12 +57,14 @@ class V4Metadata {
   static class ManifestFileWrapper implements ManifestFile, StructLike {
     private final long commitSnapshotId;
     private final long sequenceNumber;
+    private final long commitTimestampMs;
     private ManifestFile wrapped = null;
     private Long wrappedFirstRowId = null;
 
-    ManifestFileWrapper(long commitSnapshotId, long sequenceNumber) {
+    ManifestFileWrapper(long commitSnapshotId, long sequenceNumber, long commitTimestampMs) {
       this.commitSnapshotId = commitSnapshotId;
       this.sequenceNumber = sequenceNumber;
+      this.commitTimestampMs = commitTimestampMs;
     }
 
     public ManifestFile wrap(ManifestFile file, Long firstRowId) {
@@ -156,6 +159,17 @@ class V4Metadata {
                 wrapped.firstRowId() != null,
                 "Found unassigned first-row-id for file: " + wrapped.path());
             return wrapped.firstRowId();
+          }
+        case 16:
+          Long wrappedCommitTs = wrapped.commitTimestampMs();
+          if (wrappedCommitTs != null && wrappedCommitTs == ManifestWriter.UNASSIGNED_TS) {
+            Preconditions.checkState(
+                commitSnapshotId == wrapped.snapshotId(),
+                "Found unassigned commit timestamp for a manifest from snapshot: %s",
+                wrapped.snapshotId());
+            return commitTimestampMs;
+          } else {
+            return wrappedCommitTs;
           }
         default:
           throw new UnsupportedOperationException("Unknown field ordinal: " + pos);
@@ -258,6 +272,11 @@ class V4Metadata {
     }
 
     @Override
+    public Long commitTimestampMs() {
+      return wrapped.commitTimestampMs();
+    }
+
+    @Override
     public ManifestFile copy() {
       return wrapped.copy();
     }
@@ -274,7 +293,8 @@ class V4Metadata {
         ManifestEntry.SNAPSHOT_ID,
         ManifestEntry.SEQUENCE_NUMBER,
         ManifestEntry.FILE_SEQUENCE_NUMBER,
-        required(ManifestEntry.DATA_FILE_ID, "data_file", fileSchema));
+        required(ManifestEntry.DATA_FILE_ID, "data_file", fileSchema),
+        ManifestEntry.COMMIT_TIMESTAMP_MS);
   }
 
   static Types.StructType fileType(Types.StructType partitionType) {
@@ -364,6 +384,8 @@ class V4Metadata {
           return wrapped.fileSequenceNumber();
         case 4:
           return fileWrapper.wrap(wrapped.file());
+        case 5:
+          return wrapped.commitTimestampMs();
         default:
           throw new UnsupportedOperationException("Unknown field ordinal: " + pos);
       }
@@ -402,6 +424,16 @@ class V4Metadata {
     @Override
     public void setFileSequenceNumber(long fileSequenceNumber) {
       wrapped.setFileSequenceNumber(fileSequenceNumber);
+    }
+
+    @Override
+    public Long commitTimestampMs() {
+      return wrapped.commitTimestampMs();
+    }
+
+    @Override
+    public void setCommitTimestampMs(long commitTimestampMs) {
+      wrapped.setCommitTimestampMs(commitTimestampMs);
     }
 
     @Override

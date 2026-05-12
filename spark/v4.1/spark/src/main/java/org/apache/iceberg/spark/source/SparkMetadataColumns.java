@@ -76,6 +76,16 @@ public class SparkMetadataColumns {
           .preserveOnDelete(false)
           .build();
 
+  public static final SparkMetadataColumn LAST_UPDATED_TIMESTAMP_MS =
+      SparkMetadataColumn.builder()
+          .name(MetadataColumns.LAST_UPDATED_TIMESTAMP_MS.name())
+          .dataType(DataTypes.LongType)
+          .withNullability(true)
+          .preserveOnReinsert(false)
+          .preserveOnUpdate(false)
+          .preserveOnDelete(false)
+          .build();
+
   public static SparkMetadataColumn partition(Table table) {
     return SparkMetadataColumn.builder()
         .name(MetadataColumns.PARTITION_COLUMN_NAME)

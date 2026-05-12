@@ -1864,6 +1864,7 @@ public class TestTableMetadata {
             snapshotId,
             parentSnapshotId,
             0,
+            0L,
             0L)) {
       writer.addAll(
           ImmutableList.of(

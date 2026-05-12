@@ -280,7 +280,9 @@ public class SparkTable
       new SparkMetadataColumn(MetadataColumns.IS_DELETED.name(), DataTypes.BooleanType, false),
       new SparkMetadataColumn(MetadataColumns.ROW_ID.name(), DataTypes.LongType, true),
       new SparkMetadataColumn(
-          MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER.name(), DataTypes.LongType, true)
+          MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER.name(), DataTypes.LongType, true),
+      new SparkMetadataColumn(
+          MetadataColumns.LAST_UPDATED_TIMESTAMP_MS.name(), DataTypes.LongType, true)
     };
   }
 

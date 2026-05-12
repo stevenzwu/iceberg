@@ -321,6 +321,16 @@ public class SparkTable
               .preserveOnUpdate(false)
               .preserveOnDelete(false)
               .build());
+
+      metadataColumns.add(
+          SparkMetadataColumn.builder()
+              .name(MetadataColumns.LAST_UPDATED_TIMESTAMP_MS.name())
+              .dataType(DataTypes.LongType)
+              .withNullability(true)
+              .preserveOnReinsert(false)
+              .preserveOnUpdate(false)
+              .preserveOnDelete(false)
+              .build());
     }
 
     return metadataColumns.build().toArray(SparkMetadataColumn[]::new);

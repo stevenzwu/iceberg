@@ -95,7 +95,13 @@ public interface ManifestFile {
           "first_row_id",
           Types.LongType.get(),
           "Starting row ID to assign to new rows in ADDED data files");
-  // next ID to assign: 521
+  Types.NestedField COMMIT_TIMESTAMP_MS =
+      optional(
+          521,
+          "commit_timestamp_ms",
+          Types.LongType.get(),
+          "Snapshot timestamp when the manifest was committed");
+  // next ID to assign: 522
 
   Schema SCHEMA =
       new Schema(
@@ -114,7 +120,8 @@ public interface ManifestFile {
           DELETED_ROWS_COUNT,
           PARTITION_SUMMARIES,
           KEY_METADATA,
-          FIRST_ROW_ID);
+          FIRST_ROW_ID,
+          COMMIT_TIMESTAMP_MS);
 
   static Schema schema() {
     return SCHEMA;
@@ -207,6 +214,11 @@ public interface ManifestFile {
 
   /** Returns the starting row ID to assign to new rows in ADDED data files. */
   default Long firstRowId() {
+    return null;
+  }
+
+  /** Returns the snapshot timestamp in milliseconds when the manifest was committed. */
+  default Long commitTimestampMs() {
     return null;
   }
 

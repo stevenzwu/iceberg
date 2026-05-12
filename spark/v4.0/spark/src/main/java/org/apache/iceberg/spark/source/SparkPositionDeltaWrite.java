@@ -874,6 +874,8 @@ class SparkPositionDeltaWrite implements DeltaWrite, RequiresDistributionAndOrde
         dataSparkType =
             dataSparkType.add(
                 MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER.name(), LongType$.MODULE$);
+        dataSparkType =
+            dataSparkType.add(MetadataColumns.LAST_UPDATED_TIMESTAMP_MS.name(), LongType$.MODULE$);
       }
 
       this.dataFileFormat = writeConf.dataFileFormat();

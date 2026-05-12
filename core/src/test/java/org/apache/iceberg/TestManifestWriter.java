@@ -228,11 +228,11 @@ public class TestManifestWriter extends TestBase {
         addedFileCounts[fileIndex] += 1;
         addedRowCounts[fileIndex] += i;
       } else if (type == 1) {
-        writer.existing(newFile(i), 1, 1, null);
+        writer.existing(newFile(i), 1, 1, null, null);
         existingFileCounts[fileIndex] += 1;
         existingRowCounts[fileIndex] += i;
       } else {
-        writer.delete(newFile(i), 1, null);
+        writer.delete(newFile(i), 1, null, null);
         deletedFileCounts[fileIndex] += 1;
         deletedRowCounts[fileIndex] += i;
       }
@@ -284,11 +284,11 @@ public class TestManifestWriter extends TestBase {
         addedFileCounts[fileIndex] += 1;
         addedRowCounts[fileIndex] += i;
       } else if (type == 1) {
-        writer.existing(newPosDeleteFile(i), 1, 1, null);
+        writer.existing(newPosDeleteFile(i), 1, 1, null, null);
         existingFileCounts[fileIndex] += 1;
         existingRowCounts[fileIndex] += i;
       } else {
-        writer.delete(newPosDeleteFile(i), 1, null);
+        writer.delete(newPosDeleteFile(i), 1, null, null);
         deletedFileCounts[fileIndex] += 1;
         deletedRowCounts[fileIndex] += i;
       }
@@ -319,6 +319,96 @@ public class TestManifestWriter extends TestBase {
         addedRowCounts,
         existingRowCounts,
         deletedRowCounts);
+  }
+
+  @TestTemplate
+  @SuppressWarnings("deprecation")
+  public void testDeprecatedExistingAndDeleteOverloads() throws IOException {
+    assumeThat(formatVersion).isGreaterThan(1);
+
+    DataFile dataFile = newFile(10);
+    DeleteFile deleteFile = newPosDeleteFile(5);
+
+    File dataManifestFile = temp.resolve("data-manifest" + System.nanoTime() + ".avro").toFile();
+    OutputFile dataOutput = table.ops().io().newOutputFile(dataManifestFile.getCanonicalPath());
+    ManifestWriter<DataFile> dataWriter =
+        ManifestFiles.write(formatVersion, table.spec(), dataOutput, 1L);
+    dataWriter.existing(dataFile, 1L, 2L, 3L);
+    dataWriter.delete(dataFile, 2L, 3L);
+    dataWriter.close();
+
+    File deleteManifestFile =
+        temp.resolve("delete-manifest" + System.nanoTime() + ".avro").toFile();
+    OutputFile deleteOutput = table.ops().io().newOutputFile(deleteManifestFile.getCanonicalPath());
+    ManifestWriter<DeleteFile> deleteWriter =
+        ManifestFiles.writeDeleteManifest(formatVersion, table.spec(), deleteOutput, 1L);
+    deleteWriter.existing(deleteFile, 1L, 2L, 3L);
+    deleteWriter.delete(deleteFile, 2L, 3L);
+    deleteWriter.close();
+
+    try (ManifestReader<DataFile> reader =
+        ManifestFiles.read(dataWriter.toManifestFile(), table.io(), table.specs())) {
+      for (ManifestEntry<DataFile> entry : reader.entries()) {
+        assertThat(entry.commitTimestampMs())
+            .as("Deprecated overloads must default commit_timestamp_ms to null")
+            .isNull();
+      }
+    }
+
+    try (ManifestReader<DeleteFile> reader =
+        ManifestFiles.readDeleteManifest(
+            deleteWriter.toManifestFile(), table.io(), table.specs())) {
+      for (ManifestEntry<DeleteFile> entry : reader.entries()) {
+        assertThat(entry.commitTimestampMs())
+            .as("Deprecated overloads must default commit_timestamp_ms to null")
+            .isNull();
+      }
+    }
+  }
+
+  @TestTemplate
+  @SuppressWarnings("deprecation")
+  public void testDeprecatedRollingWriterOverloads() throws IOException {
+    assumeThat(formatVersion).isGreaterThan(1);
+
+    RollingManifestWriter<DataFile> dataWriter =
+        new RollingManifestWriter<>(
+            () -> ManifestFiles.write(formatVersion, SPEC, newManifestFile(), 1L), SMALL_FILE_SIZE);
+    dataWriter.existing(newFile(1), 1L, 2L, 3L);
+    dataWriter.delete(newFile(2), 2L, 3L);
+    dataWriter.close();
+
+    RollingManifestWriter<DeleteFile> deleteWriter =
+        new RollingManifestWriter<>(
+            () -> ManifestFiles.writeDeleteManifest(formatVersion, SPEC, newManifestFile(), 1L),
+            SMALL_FILE_SIZE);
+    deleteWriter.existing(newPosDeleteFile(1), 1L, 2L, 3L);
+    deleteWriter.delete(newPosDeleteFile(2), 2L, 3L);
+    deleteWriter.close();
+
+    for (ManifestFile manifest : dataWriter.toManifestFiles()) {
+      try (ManifestReader<DataFile> reader =
+          ManifestFiles.read(manifest, table.io(), table.specs())) {
+        for (ManifestEntry<DataFile> entry : reader.entries()) {
+          assertThat(entry.commitTimestampMs())
+              .as(
+                  "Deprecated RollingManifestWriter overloads must default commit_timestamp_ms to null")
+              .isNull();
+        }
+      }
+    }
+
+    for (ManifestFile manifest : deleteWriter.toManifestFiles()) {
+      try (ManifestReader<DeleteFile> reader =
+          ManifestFiles.readDeleteManifest(manifest, table.io(), table.specs())) {
+        for (ManifestEntry<DeleteFile> entry : reader.entries()) {
+          assertThat(entry.commitTimestampMs())
+              .as(
+                  "Deprecated RollingManifestWriter overloads must default commit_timestamp_ms to null")
+              .isNull();
+        }
+      }
+    }
   }
 
   private void checkManifests(

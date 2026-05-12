@@ -225,7 +225,8 @@ class SparkCopyOnWriteScan extends SparkPartitioningAwareScan<FileScanTask>
   private boolean isRowLineageField(StructField field) {
     boolean hasLineageFieldName =
         field.name().equals(MetadataColumns.ROW_ID.name())
-            || field.name().equals(MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER.name());
+            || field.name().equals(MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER.name())
+            || field.name().equals(MetadataColumns.LAST_UPDATED_TIMESTAMP_MS.name());
     return hasLineageFieldName && field.metadata().contains("__metadata_col");
   }
 }

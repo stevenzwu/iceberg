@@ -67,6 +67,12 @@ public class DataTestHelpers {
             expectedValue = idToConstant.get(id);
           }
 
+        } else if (id == MetadataColumns.LAST_UPDATED_TIMESTAMP_MS.fieldId()) {
+          expectedValue = expected.getField(expectedField.name());
+          if (expectedValue == null && idToConstant != null) {
+            expectedValue = idToConstant.get(id);
+          }
+
         } else {
           expectedValue = expected.getField(expectedField.name());
         }

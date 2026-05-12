@@ -87,6 +87,7 @@ import org.apache.spark.sql.Encoders;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.catalyst.TableIdentifier;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestTemplate;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
@@ -192,6 +193,56 @@ public class TestRewriteManifestsAction extends TestBase {
           assertEqual(deleteFile, deleteFile3);
         }
       }
+    }
+  }
+
+  @Test
+  public void testRewriteManifestsPreservesV4CommitTimestamp() throws IOException {
+    // Regression test: RewriteManifestsSparkAction must propagate commit_timestamp_ms from existing
+    // entries to the rewritten manifest so the row-level _last_updated_timestamp_ms metadata column
+    // continues to reflect the original commit time after manifests are rewritten.
+    PartitionSpec spec = PartitionSpec.unpartitioned();
+    Map<String, String> options = Maps.newHashMap();
+    options.put(TableProperties.FORMAT_VERSION, "4");
+    Table table = TABLES.create(SCHEMA, spec, options, tableLocation);
+
+    DataFile dataFile1 = newDataFile(table, TestHelpers.Row.of());
+    table.newFastAppend().appendFile(dataFile1).commit();
+    long firstCommitTs = table.currentSnapshot().timestampMillis();
+
+    DataFile dataFile2 = newDataFile(table, TestHelpers.Row.of());
+    table.newFastAppend().appendFile(dataFile2).commit();
+    long secondCommitTs = table.currentSnapshot().timestampMillis();
+    assertThat(secondCommitTs).isGreaterThan(firstCommitTs);
+
+    assertThat(table.currentSnapshot().allManifests(table.io())).hasSize(2);
+
+    SparkActions.get()
+        .rewriteManifests(table)
+        .rewriteIf(manifest -> true)
+        .option(RewriteManifestsSparkAction.USE_CACHING, "false")
+        .execute();
+
+    table.refresh();
+    List<ManifestFile> rewritten = table.currentSnapshot().allManifests(table.io());
+    assertThat(rewritten).as("All manifests should have been merged").hasSize(1);
+
+    Map<String, Long> expected = Maps.newHashMap();
+    expected.put(dataFile1.location(), firstCommitTs);
+    expected.put(dataFile2.location(), secondCommitTs);
+
+    try (CloseableIterable<DataFile> reader =
+        ManifestFiles.read(rewritten.get(0), table.io(), table.specs())) {
+      int count = 0;
+      for (DataFile file : reader) {
+        Long expectedTs = expected.get(file.location());
+        assertThat(expectedTs).as("Unexpected file in rewritten manifest").isNotNull();
+        assertThat(file.commitTimestampMs())
+            .as("commit_timestamp_ms must be preserved across manifest rewrite")
+            .isEqualTo(expectedTs);
+        count++;
+      }
+      assertThat(count).isEqualTo(2);
     }
   }
 

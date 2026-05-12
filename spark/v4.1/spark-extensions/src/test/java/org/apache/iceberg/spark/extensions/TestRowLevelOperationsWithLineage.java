@@ -44,6 +44,7 @@ import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.SnapshotRef;
 import org.apache.iceberg.StructLike;
 import org.apache.iceberg.Table;
+import org.apache.iceberg.TableUtil;
 import org.apache.iceberg.TestHelpers;
 import org.apache.iceberg.data.GenericFileWriterFactory;
 import org.apache.iceberg.data.GenericRecord;
@@ -78,15 +79,21 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
               Types.NestedField.required(1, "id", Types.IntegerType.get()),
               Types.NestedField.required(2, "data", Types.StringType.get()),
               MetadataColumns.ROW_ID,
-              MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER));
+              MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER,
+              MetadataColumns.LAST_UPDATED_TIMESTAMP_MS));
 
+  // The records below simulate freshly inserted rows: _last_updated_timestamp_ms is left null so
+  // that on read it inherits commit_timestamp_ms from the manifest entry (the V4 contract). The
+  // _row_id and _last_updated_sequence_number fields are still populated explicitly because the
+  // tests rely on specific values for those columns; the readers always prefer a non-null row-level
+  // value, so the literal values flow through unchanged.
   static final List<Record> INITIAL_RECORDS =
       ImmutableList.of(
-          createRecord(SCHEMA, 100, "a", 0L, 1L),
-          createRecord(SCHEMA, 101, "b", 1L, 1L),
-          createRecord(SCHEMA, 102, "c", 2L, 1L),
-          createRecord(SCHEMA, 103, "d", 3L, 1L),
-          createRecord(SCHEMA, 104, "e", 4L, 1L));
+          createRecord(SCHEMA, 100, "a", 0L, 1L, null),
+          createRecord(SCHEMA, 101, "b", 1L, 1L, null),
+          createRecord(SCHEMA, 102, "c", 2L, 1L, null),
+          createRecord(SCHEMA, 103, "d", 3L, 1L, null),
+          createRecord(SCHEMA, 104, "e", 4L, 1L, null));
 
   @Parameters(
       name =
@@ -141,6 +148,18 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
         null,
         DISTRIBUTED,
         3
+      },
+      {
+        "testhadoop",
+        SparkCatalog.class.getName(),
+        ImmutableMap.of("type", "hadoop"),
+        FileFormat.PARQUET,
+        true,
+        WRITE_DISTRIBUTION_MODE_HASH,
+        true,
+        null,
+        LOCAL,
+        4
       },
     };
   }
@@ -306,6 +325,7 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
     createBranchIfNeeded();
     Table table = loadIcebergTable(spark, tableName);
     appendUnpartitionedRecords(table, INITIAL_RECORDS);
+    long appendTimestamp = latestSnapshot(table).timestampMillis();
     createOrReplaceView(
         "source",
         "id INT, data string",
@@ -319,7 +339,8 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
             + "  UPDATE SET t.data = s.data ",
         commitTarget());
 
-    long updateSequenceNumber = latestSnapshot(table).sequenceNumber();
+    Snapshot updateSnapshot = latestSnapshot(table);
+    long updateSequenceNumber = updateSnapshot.sequenceNumber();
     assertEquals(
         "Rows which are carried over or updated should have expected lineage",
         ImmutableList.of(
@@ -329,6 +350,19 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
             row(103, "d", 3L, 1L),
             row(104, "e", 4L, 1L)),
         rowsWithLineage());
+
+    if (formatVersion >= 4) {
+      long updateTimestamp = updateSnapshot.timestampMillis();
+      assertTimestamps(
+          ImmutableList.of(
+              row(0L, appendTimestamp),
+              row(1L, updateTimestamp),
+              row(2L, updateTimestamp),
+              row(3L, appendTimestamp),
+              row(4L, appendTimestamp)));
+    } else {
+      assertAllTimestampsNull();
+    }
   }
 
   @TestTemplate
@@ -417,9 +451,11 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
     createBranchIfNeeded();
     Table table = loadIcebergTable(spark, tableName);
     appendUnpartitionedRecords(table, INITIAL_RECORDS);
+    long appendTimestamp = latestSnapshot(table).timestampMillis();
 
     sql("UPDATE %s AS t set data = 'updated_b' WHERE id = 101", commitTarget());
-    long updateSequenceNumber = latestSnapshot(table).sequenceNumber();
+    Snapshot updateSnapshot = latestSnapshot(table);
+    long updateSequenceNumber = updateSnapshot.sequenceNumber();
 
     assertEquals(
         "Rows which are carried over or updated should have expected lineage",
@@ -430,6 +466,22 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
             row(103, "d", 3L, 1L),
             row(104, "e", 4L, 1L)),
         rowsWithLineage());
+
+    if (formatVersion < 4) {
+      assertAllTimestampsNull();
+      return;
+    }
+
+    if (formatVersion >= 4) {
+      long updateTimestamp = updateSnapshot.timestampMillis();
+      assertTimestamps(
+          ImmutableList.of(
+              row(0L, appendTimestamp),
+              row(1L, updateTimestamp),
+              row(2L, appendTimestamp),
+              row(3L, appendTimestamp),
+              row(4L, appendTimestamp)));
+    }
   }
 
   @TestTemplate
@@ -464,7 +516,7 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
     List<Record> initialRecords = Lists.newArrayList();
     int rowId = 0;
     for (int id = 100; id < startingId + numRecords; id++) {
-      initialRecords.add(createRecord(SCHEMA, id, "data_" + id, rowId++, 1L));
+      initialRecords.add(createRecord(SCHEMA, id, "data_" + id, rowId++, 1L, null));
     }
 
     appendUnpartitionedRecords(table, initialRecords);
@@ -543,6 +595,80 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
         selectTarget());
   }
 
+  private void assertTimestamps(List<Object[]> expected) {
+    List<Object[]> actual =
+        sql("SELECT _row_id, _last_updated_timestamp_ms FROM %s ORDER BY _row_id", selectTarget());
+    assertEquals("Rows should have expected timestamps", expected, actual);
+  }
+
+  /**
+   * Verifies that every row in the table has a {@code null} {@code _last_updated_timestamp_ms}.
+   * Used to assert the V3 (and earlier) contract: the metadata column is exposed but always null
+   * because pre-V4 manifests do not record a commit timestamp.
+   */
+  private void assertAllTimestampsNull() {
+    List<Object[]> actual = sql("SELECT _last_updated_timestamp_ms FROM %s", selectTarget());
+    for (Object[] r : actual) {
+      assertThat(r[0])
+          .as("Pre-V4 tables must expose null _last_updated_timestamp_ms for every row")
+          .isNull();
+    }
+  }
+
+  @TestTemplate
+  public void testV3ToV4UpgradeTimestampInheritance()
+      throws NoSuchTableException, ParseException, IOException {
+    // The base parameterization for this suite already covers V3 and V4 separately. Run the
+    // upgrade scenario only when the table starts at V3 to avoid duplicating the assertion under
+    // the V4 parameter (where the table is created at V4 and there is nothing to upgrade).
+    assumeThat(formatVersion).isEqualTo(3);
+    // The session catalog parameterization re-creates the table on each operation in a way that
+    // makes the explicit upgrade contract under test below fragile. Restrict to the hadoop catalog.
+    assumeThat(catalogName).isEqualTo("testhadoop");
+    // The branch variant routes writes through createBranchIfNeeded(), which complicates the
+    // pre-upgrade vs. post-upgrade snapshot bookkeeping. Restrict to the main branch so we can
+    // assert against currentSnapshot() directly.
+    assumeThat(branch).isNull();
+
+    createAndInitTable("id INT, data STRING", null);
+    Table table = loadIcebergTable(spark, tableName);
+    appendUnpartitionedRecords(table, INITIAL_RECORDS);
+
+    // Pre-upgrade: V3 manifests do not carry commit_timestamp_ms, so the metadata column must
+    // read as null for every row regardless of what the data file holds.
+    assertAllTimestampsNull();
+
+    // Upgrade the table format to V4. New snapshots written from this point on must carry
+    // commit_timestamp_ms; previously committed manifests continue to read as null because the
+    // V3 manifests in the manifest list have no commit_timestamp_ms to inherit.
+    sql("ALTER TABLE %s SET TBLPROPERTIES('format-version' '4')", tableName);
+    table.refresh();
+    assertThat(TableUtil.formatVersion(table)).as("Table should be upgraded to V4").isEqualTo(4);
+
+    // Insert a new row via the production Spark write path post-upgrade. The new manifest is
+    // written at V4 and carries commit_timestamp_ms; the reader must inherit that value for the
+    // new row.
+    sql("INSERT INTO %s VALUES (200, 'f')", tableName);
+    table.refresh();
+    long postUpgradeTimestamp = table.currentSnapshot().timestampMillis();
+
+    // The pre-upgrade rows continue to read as null (their V3 manifests have no
+    // commit_timestamp_ms). The post-upgrade row inherits the new V4 snapshot's
+    // commit_timestamp_ms.
+    List<Object[]> actual =
+        sql("SELECT id, _last_updated_timestamp_ms FROM %s ORDER BY id", selectTarget());
+    assertEquals(
+        "Pre-upgrade rows must read null; post-upgrade row must inherit V4 commit_timestamp_ms",
+        ImmutableList.of(
+            row(100, null),
+            row(101, null),
+            row(102, null),
+            row(103, null),
+            row(104, null),
+            row(200, postUpgradeTimestamp)),
+        actual);
+  }
+
   /**
    * Partitions the provided records based on the spec and partition function
    *
@@ -600,12 +726,18 @@ public abstract class TestRowLevelOperationsWithLineage extends SparkRowLevelOpe
   }
 
   protected static Record createRecord(
-      Schema schema, int id, String data, long rowId, long lastUpdatedSequenceNumber) {
+      Schema schema,
+      int id,
+      String data,
+      long rowId,
+      long lastUpdatedSequenceNumber,
+      Long lastUpdatedTimestampMs) {
     Record record = GenericRecord.create(schema);
     record.set(0, id);
     record.set(1, data);
     record.set(2, rowId);
     record.set(3, lastUpdatedSequenceNumber);
+    record.set(4, lastUpdatedTimestampMs);
     return record;
   }
 

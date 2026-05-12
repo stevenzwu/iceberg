@@ -95,7 +95,8 @@ public class TestManifestListEncryption {
           EXISTING_ROWS,
           DELETED_FILES,
           DELETED_ROWS,
-          FIRST_ROW_ID);
+          FIRST_ROW_ID,
+          null);
 
   @Test
   public void testEncryption() throws IOException {
@@ -217,7 +218,8 @@ public class TestManifestListEncryption {
             SNAPSHOT_ID,
             SNAPSHOT_ID - 1,
             SEQ_NUM,
-            SNAPSHOT_FIRST_ROW_ID);
+            SNAPSHOT_FIRST_ROW_ID,
+            0L);
     writer.add(TEST_MANIFEST);
     writer.close();
     ManifestListFile manifestListFile = writer.toManifestListFile();

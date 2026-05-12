@@ -75,6 +75,23 @@ public class RollingManifestWriter<F extends ContentFile<F>> implements Closeabl
   }
 
   /**
+   * Add an added entry for a file with explicit data sequence number and commit timestamp.
+   *
+   * <p>The entry's snapshot ID will be this manifest's snapshot ID. The entry's data sequence
+   * number and commit timestamp are taken from the arguments; the file sequence number will be
+   * assigned at commit.
+   *
+   * @param addedFile a data file
+   * @param dataSequenceNumber a data sequence number for the file
+   * @param commitTimestampMs commit timestamp (in milliseconds) of the snapshot when the file was
+   *     added; may be {@code null} for tables that do not track commit timestamps (V3 and earlier)
+   */
+  public void add(F addedFile, long dataSequenceNumber, Long commitTimestampMs) {
+    currentWriter().add(addedFile, dataSequenceNumber, commitTimestampMs);
+    currentFileRows++;
+  }
+
+  /**
    * Add an existing entry for a file.
    *
    * <p>The original data and file sequence numbers, snapshot ID, which were assigned at commit,
@@ -84,10 +101,41 @@ public class RollingManifestWriter<F extends ContentFile<F>> implements Closeabl
    * @param fileSnapshotId snapshot ID when the data file was added to the table
    * @param dataSequenceNumber a data sequence number of the file (assigned when the file was added)
    * @param fileSequenceNumber a file sequence number (assigned when the file was added)
+   * @deprecated since 1.12.0, will be removed in 1.13.0; use {@link #existing(ContentFile, long,
+   *     long, Long, Long)} which preserves the entry's commit timestamp.
    */
+  @Deprecated
   public void existing(
       F existingFile, long fileSnapshotId, long dataSequenceNumber, Long fileSequenceNumber) {
-    currentWriter().existing(existingFile, fileSnapshotId, dataSequenceNumber, fileSequenceNumber);
+    existing(existingFile, fileSnapshotId, dataSequenceNumber, fileSequenceNumber, null);
+  }
+
+  /**
+   * Add an existing entry for a file.
+   *
+   * <p>The original data and file sequence numbers, snapshot ID, and commit timestamp, which were
+   * assigned at commit, must be preserved when adding an existing entry.
+   *
+   * @param existingFile a file
+   * @param fileSnapshotId snapshot ID when the data file was added to the table
+   * @param dataSequenceNumber a data sequence number of the file (assigned when the file was added)
+   * @param fileSequenceNumber a file sequence number (assigned when the file was added)
+   * @param commitTimestampMs commit timestamp (in milliseconds) of the snapshot when the file was
+   *     added; may be {@code null} for tables that do not track commit timestamps (V3 and earlier)
+   */
+  public void existing(
+      F existingFile,
+      long fileSnapshotId,
+      long dataSequenceNumber,
+      Long fileSequenceNumber,
+      Long commitTimestampMs) {
+    currentWriter()
+        .existing(
+            existingFile,
+            fileSnapshotId,
+            dataSequenceNumber,
+            fileSequenceNumber,
+            commitTimestampMs);
     currentFileRows++;
   }
 
@@ -100,9 +148,30 @@ public class RollingManifestWriter<F extends ContentFile<F>> implements Closeabl
    * @param deletedFile a file
    * @param dataSequenceNumber a data sequence number of the file (assigned when the file was added)
    * @param fileSequenceNumber a file sequence number (assigned when the file was added)
+   * @deprecated since 1.12.0, will be removed in 1.13.0; use {@link #delete(ContentFile, long,
+   *     Long, Long)} which preserves the entry's commit timestamp.
    */
+  @Deprecated
   public void delete(F deletedFile, long dataSequenceNumber, Long fileSequenceNumber) {
-    currentWriter().delete(deletedFile, dataSequenceNumber, fileSequenceNumber);
+    delete(deletedFile, dataSequenceNumber, fileSequenceNumber, null);
+  }
+
+  /**
+   * Add a delete entry for a file.
+   *
+   * <p>The entry's snapshot ID will be this manifest's snapshot ID. However, the original data and
+   * file sequence numbers and commit timestamp of the file must be preserved when the file is
+   * marked as deleted.
+   *
+   * @param deletedFile a file
+   * @param dataSequenceNumber a data sequence number of the file (assigned when the file was added)
+   * @param fileSequenceNumber a file sequence number (assigned when the file was added)
+   * @param commitTimestampMs commit timestamp (in milliseconds) of the snapshot when the file was
+   *     added; may be {@code null} for tables that do not track commit timestamps (V3 and earlier)
+   */
+  public void delete(
+      F deletedFile, long dataSequenceNumber, Long fileSequenceNumber, Long commitTimestampMs) {
+    currentWriter().delete(deletedFile, dataSequenceNumber, fileSequenceNumber, commitTimestampMs);
     currentFileRows++;
   }
 

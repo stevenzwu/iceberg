@@ -186,7 +186,8 @@ class SparkBatch implements Batch {
     return field.type().isPrimitiveType()
         && !field.type().typeId().equals(Type.TypeID.UUID)
         && field.fieldId() != MetadataColumns.ROW_ID.fieldId()
-        && field.fieldId() != MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER.fieldId();
+        && field.fieldId() != MetadataColumns.LAST_UPDATED_SEQUENCE_NUMBER.fieldId()
+        && field.fieldId() != MetadataColumns.LAST_UPDATED_TIMESTAMP_MS.fieldId();
   }
 
   // conditions for using ORC batch reads:
