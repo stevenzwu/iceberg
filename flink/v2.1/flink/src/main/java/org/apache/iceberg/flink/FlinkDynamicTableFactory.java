@@ -36,6 +36,7 @@ import org.apache.flink.table.connector.sink.DynamicTableSink;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.factories.DynamicTableSinkFactory;
 import org.apache.flink.table.factories.DynamicTableSourceFactory;
+import org.apache.iceberg.CatalogProperties;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.exceptions.AlreadyExistsException;
 import org.apache.iceberg.flink.source.IcebergTableSource;
@@ -153,9 +154,12 @@ public class FlinkDynamicTableFactory
     if (catalog != null) {
       catalogLoader = catalog.getCatalogLoader();
     } else {
-      FlinkCatalog flinkCatalog =
-          createCatalogLoader(writeProps, flinkConf.get(FlinkCreateTableOptions.CATALOG_NAME));
-      catalogLoader = flinkCatalog.getCatalogLoader();
+      Map<String, String> mergedProps = mergeSrcCatalogProps(writeProps);
+      String catalogName =
+          mergedProps.getOrDefault(
+              FlinkCreateTableOptions.CATALOG_NAME.key(),
+              flinkConf.get(FlinkCreateTableOptions.CATALOG_NAME));
+      catalogLoader = resolveSourceCatalog(catalogName, mergedProps).getCatalogLoader();
     }
 
     ResolvedCatalogTable resolvedCatalogTable = context.getCatalogTable();
@@ -201,7 +205,7 @@ public class FlinkDynamicTableFactory
 
     String catalogTable = flinkConf.get(FlinkCreateTableOptions.CATALOG_TABLE, tableName);
 
-    FlinkCatalog flinkCatalog = createCatalogLoader(mergedProps, catalogName);
+    FlinkCatalog flinkCatalog = resolveSourceCatalog(catalogName, mergedProps);
     ObjectPath objectPath = new ObjectPath(catalogDatabase, catalogTable);
 
     // Create database if not exists in the external catalog.
@@ -237,9 +241,59 @@ public class FlinkDynamicTableFactory
   }
 
   /**
-   * Merges source catalog properties with connector properties. Iceberg Catalog properties are
-   * serialized as json in FlinkCatalog#getTable to be able to isolate catalog props from iceberg
-   * table props, Here, we flatten and merge them back to use to create catalog.
+   * Resolves the source Iceberg {@link FlinkCatalog} for a table whose Flink-side options reference
+   * a catalog by name.
+   *
+   * <p>Resolution order:
+   *
+   * <ol>
+   *   <li>If the table options carry inline catalog configuration (i.e., {@code catalog-type} or
+   *       {@code catalog-impl}), construct a fresh catalog from those properties. This preserves
+   *       behavior for manual DDL that inlines the full catalog configuration alongside {@code
+   *       connector=iceberg}, and for legacy LIKE-targets that embedded the source catalog's
+   *       connection properties in the {@code src-catalog} JSON blob (already flattened by {@link
+   *       #mergeSrcCatalogProps}).
+   *   <li>Otherwise, look up the catalog by name in {@link FlinkCatalogRegistry}. This is the path
+   *       used by LIKE-targets that reference the source catalog by name only, and by manual DDL
+   *       that opts in to by-name resolution.
+   * </ol>
+   *
+   * <p>If neither path produces a catalog, a clear error is thrown asking the user to register the
+   * source catalog in the current session.
+   */
+  private static FlinkCatalog resolveSourceCatalog(
+      String catalogName, Map<String, String> mergedProps) {
+    Preconditions.checkArgument(
+        catalogName != null,
+        "Invalid catalog name: null. Set %s create table option.",
+        FlinkCreateTableOptions.CATALOG_NAME.key());
+
+    if (mergedProps.containsKey(FlinkCatalogFactory.ICEBERG_CATALOG_TYPE)
+        || mergedProps.containsKey(CatalogProperties.CATALOG_IMPL)) {
+      return createCatalogLoader(mergedProps, catalogName);
+    }
+
+    FlinkCatalog registered = FlinkCatalogRegistry.get(catalogName);
+    if (registered != null) {
+      return registered;
+    }
+
+    throw new IllegalArgumentException(
+        String.format(
+            "Cannot resolve source Iceberg catalog '%s'. The catalog is not registered in the "
+                + "current Flink session and the table options do not contain enough "
+                + "configuration to construct it. Run CREATE CATALOG `%s` WITH (...) before "
+                + "querying tables that reference it.",
+            catalogName, catalogName));
+  }
+
+  /**
+   * Flattens the legacy {@code src-catalog} JSON blob (when present) into a single property map.
+   *
+   * <p>Tables produced by {@link FlinkCatalog#getTable(ObjectPath)} in current versions reference
+   * the source catalog by name and do not carry this blob. This method is retained so that
+   * LIKE-targets created against older versions continue to load. New code paths should prefer
+   * resolving the source catalog through {@link FlinkCatalogRegistry}.
    *
    * @param tableProps the existing table properties
    * @return a map of merged properties, with source catalog properties taking precedence when keys

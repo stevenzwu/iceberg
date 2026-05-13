@@ -98,7 +98,6 @@ public class FlinkCatalog extends AbstractCatalog {
   private final Namespace baseNamespace;
   private final SupportsNamespaces asNamespaceCatalog;
   private final Closeable closeable;
-  private final Map<String, String> catalogProps;
   private final boolean cacheEnabled;
 
   public FlinkCatalog(
@@ -111,7 +110,6 @@ public class FlinkCatalog extends AbstractCatalog {
       long cacheExpirationIntervalMs) {
     super(catalogName, defaultDatabase);
     this.catalogLoader = catalogLoader;
-    this.catalogProps = catalogProps;
     this.baseNamespace = baseNamespace;
     this.cacheEnabled = cacheEnabled;
 
@@ -125,6 +123,10 @@ public class FlinkCatalog extends AbstractCatalog {
     closeable = originalCatalog instanceof Closeable ? (Closeable) originalCatalog : null;
 
     FlinkEnvironmentContext.init();
+
+    // Register this catalog so the dynamic table factory can resolve it by name when loading
+    // tables whose CatalogTable.options carry only a catalog-name reference.
+    FlinkCatalogRegistry.register(catalogName, this);
   }
 
   @Override
@@ -132,6 +134,7 @@ public class FlinkCatalog extends AbstractCatalog {
 
   @Override
   public void close() throws CatalogException {
+    FlinkCatalogRegistry.unregister(getName(), this);
     if (closeable != null) {
       try {
         closeable.close();
@@ -337,14 +340,15 @@ public class FlinkCatalog extends AbstractCatalog {
       throws TableNotExistException, CatalogException {
     Table table = loadIcebergTable(tablePath);
 
-    // Flink's CREATE TABLE LIKE clause relies on properties sent back here to create new table.
-    // Inorder to create such table in non iceberg catalog, we need to send across catalog
-    // properties also.
-    // As Flink API accepts only Map<String, String> for props, here we are serializing catalog
-    // props as json string to distinguish between catalog and table properties in createTable.
+    // Flink's CREATE TABLE LIKE clause relies on the returned CatalogTable.options to carry
+    // enough information for the LIKE-target to load this Iceberg table later. The src-catalog
+    // blob carries only a reference to the source catalog (name + database + table) and an
+    // empty catalog-props map; FlinkDynamicTableFactory resolves the source FlinkCatalog by
+    // name from FlinkCatalogRegistry at read time. The source catalog must be registered in
+    // the current Flink session (e.g., via CREATE CATALOG ...) for the resolution to succeed.
     String srcCatalogProps =
         FlinkCreateTableOptions.toJson(
-            getName(), tablePath.getDatabaseName(), tablePath.getObjectName(), catalogProps);
+            getName(), tablePath.getDatabaseName(), tablePath.getObjectName(), ImmutableMap.of());
 
     Map<String, String> tableProps = table.properties();
     if (tableProps.containsKey(FlinkCreateTableOptions.CONNECTOR_PROPS_KEY)

@@ -89,6 +89,16 @@ class FlinkCreateTableOptions {
   public static final String CONNECTOR_PROPS_KEY = "connector";
   public static final String LOCATION_KEY = "location";
 
+  /**
+   * Serializes a source catalog reference plus its connection properties into a JSON blob.
+   *
+   * <p>Retained for tests and any callers that still need to produce the legacy {@code src-catalog}
+   * blob. Production code paths no longer emit this blob; {@link
+   * FlinkCatalog#getTable(org.apache.flink.table.catalog.ObjectPath)} now references the source
+   * catalog by name and {@link FlinkDynamicTableFactory} resolves it through {@link
+   * FlinkCatalogRegistry}. The corresponding {@link #fromJson(String)} parser remains in use for
+   * backward compatibility with LIKE-targets created by older versions.
+   */
   static String toJson(
       String catalogName, String catalogDb, String catalogTable, Map<String, String> catalogProps) {
     return JsonUtil.generate(

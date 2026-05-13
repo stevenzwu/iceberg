@@ -34,7 +34,6 @@ import org.apache.flink.table.api.Schema.UnresolvedPrimaryKey;
 import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.catalog.CatalogTable;
-import org.apache.flink.table.catalog.CommonCatalogOptions;
 import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.table.catalog.exceptions.TableNotExistException;
 import org.apache.iceberg.BaseTable;
@@ -228,19 +227,36 @@ public class TestFlinkCatalogTable extends CatalogTestBase {
                 .column("id", DataTypes.BIGINT())
                 .build());
 
-    // `type` option is filtered out by Flink
-    // https://github.com/apache/flink/blob/edc3d68736de73665440f4313ddcfd9142d8d42b/flink-table/flink-table-common/src/main/java/org/apache/flink/table/factories/FactoryUtil.java#L378
-    Map<String, String> filteredOptions = Maps.newHashMap(config);
-    filteredOptions.remove(CommonCatalogOptions.CATALOG_TYPE.key());
-
-    String srcCatalogProps =
-        FlinkCreateTableOptions.toJson(catalogName, DATABASE, "tl", filteredOptions);
+    // The LIKE-target references the source catalog by name (catalog-name + catalog-database +
+    // catalog-table). The source catalog's connection properties are not embedded; the empty
+    // catalog-props sub-object below is checked exactly via the equality assertion.
+    String expectedSrcCatalogProps =
+        FlinkCreateTableOptions.toJson(catalogName, DATABASE, "tl", Collections.emptyMap());
     Map<String, String> options = catalogTable.getOptions();
     assertThat(options)
         .containsEntry(
             FlinkCreateTableOptions.CONNECTOR_PROPS_KEY,
             FlinkDynamicTableFactory.FACTORY_IDENTIFIER)
-        .containsEntry(FlinkCreateTableOptions.SRC_CATALOG_PROPS_KEY, srcCatalogProps);
+        .containsEntry(FlinkCreateTableOptions.SRC_CATALOG_PROPS_KEY, expectedSrcCatalogProps);
+  }
+
+  @TestTemplate
+  public void testCreateTableLikeReadsByName() {
+    // The LIKE-target carries only a catalog name reference; FlinkDynamicTableFactory has to
+    // resolve the source FlinkCatalog through FlinkCatalogRegistry. The base namespace path
+    // intersects with a separate code path in FlinkDynamicTableFactory#createTableLoader and is
+    // not exercised here.
+    assumeThat(baseNamespace.isEmpty())
+        .as("BaseNamespace is exercised in a separate test")
+        .isTrue();
+
+    sql("CREATE TABLE tl(id BIGINT)");
+    sql("INSERT INTO tl VALUES (1), (2), (3)");
+    sql("CREATE TABLE `default_catalog`.`default_database`.tl2 LIKE tl");
+
+    assertThat(sql("SELECT id FROM `default_catalog`.`default_database`.tl2"))
+        .extracting(row -> row.getField(0))
+        .containsExactlyInAnyOrder(1L, 2L, 3L);
   }
 
   @TestTemplate
