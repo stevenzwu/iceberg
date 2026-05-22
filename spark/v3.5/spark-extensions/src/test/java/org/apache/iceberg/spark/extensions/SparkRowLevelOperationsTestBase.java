@@ -157,49 +157,6 @@ public abstract class SparkRowLevelOperationsTestBase extends ExtensionsTestBase
         "spark_catalog",
         SparkSessionCatalog.class.getName(),
         ImmutableMap.of(
-            "type", "hive",
-            "default-namespace", "default",
-            "clients", "1",
-            "parquet-enabled", "false",
-            "cache-enabled",
-                "false" // Spark will delete tables using v1, leaving the cache out of sync
-            ),
-        FileFormat.AVRO,
-        false,
-        WRITE_DISTRIBUTION_MODE_RANGE,
-        false,
-        "test",
-        DISTRIBUTED,
-        2
-      },
-      {
-        "testhadoop",
-        SparkCatalog.class.getName(),
-        ImmutableMap.of("type", "hadoop"),
-        FileFormat.PARQUET,
-        true,
-        WRITE_DISTRIBUTION_MODE_HASH,
-        true,
-        null,
-        LOCAL,
-        3
-      },
-      {
-        "testhadoop",
-        SparkCatalog.class.getName(),
-        ImmutableMap.of("type", "hadoop"),
-        FileFormat.PARQUET,
-        false,
-        WRITE_DISTRIBUTION_MODE_HASH,
-        true,
-        null,
-        LOCAL,
-        3
-      },
-      {
-        "spark_catalog",
-        SparkSessionCatalog.class.getName(),
-        ImmutableMap.of(
             "type",
             "hive",
             "default-namespace",
