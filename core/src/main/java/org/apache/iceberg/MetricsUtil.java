@@ -555,6 +555,50 @@ public class MetricsUtil {
     return result.isEmpty() ? null : Collections.unmodifiableMap(result);
   }
 
+  static ContentStats fromContentFile(Schema schema, ContentFile<?> file) {
+    if (file == null) {
+      return null;
+    }
+
+    Map<Integer, ByteBuffer> lowerBounds = file.lowerBounds();
+    Map<Integer, ByteBuffer> upperBounds = file.upperBounds();
+    Map<Integer, Type> originalTypes = null;
+    if (lowerBounds != null || upperBounds != null) {
+      originalTypes = Maps.newHashMap();
+      if (lowerBounds != null) {
+        for (int id : lowerBounds.keySet()) {
+          Types.NestedField field = schema.findField(id);
+          if (field != null) {
+            originalTypes.put(id, field.type());
+          }
+        }
+      }
+
+      if (upperBounds != null) {
+        for (int id : upperBounds.keySet()) {
+          if (!originalTypes.containsKey(id)) {
+            Types.NestedField field = schema.findField(id);
+            if (field != null) {
+              originalTypes.put(id, field.type());
+            }
+          }
+        }
+      }
+    }
+
+    Metrics metrics =
+        new Metrics(
+            file.recordCount(),
+            file.columnSizes(),
+            file.valueCounts(),
+            file.nullValueCounts(),
+            file.nanValueCounts(),
+            lowerBounds,
+            upperBounds,
+            originalTypes);
+    return fromMetrics(schema, metrics);
+  }
+
   static ContentStats fromMetrics(Schema schema, Metrics metrics) {
     if (null == metrics) {
       return null;
