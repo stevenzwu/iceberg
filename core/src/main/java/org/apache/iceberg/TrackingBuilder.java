@@ -27,7 +27,7 @@ class TrackingBuilder {
   private final Long snapshotId;
   private final Long dataSequenceNumber;
   private final Long fileSequenceNumber;
-  private final Long firstRowId;
+  private Long firstRowId;
   private EntryStatus status;
   private Long dvSnapshotId;
   private byte[] deletedPositions;
@@ -108,6 +108,11 @@ class TrackingBuilder {
       this.status = EntryStatus.MODIFIED;
     }
 
+    return this;
+  }
+
+  TrackingBuilder firstRowId(Long newFirstRowId) {
+    this.firstRowId = newFirstRowId;
     return this;
   }
 

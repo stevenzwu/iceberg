@@ -721,6 +721,63 @@ public class TestTrackedFileBuilder {
         .hasMessage("The same deletion vector already added");
   }
 
+  @Test
+  public void buildWithExplicitTrackingFields() {
+    // Build a tracking row via explicit field setters (e.g., for a manifest reference with explicit
+    // data/file seq numbers), bypassing the added()/from(source) tracking-derivation path. build()
+    // constructs the Tracking from accumulated fields.
+    TrackedFile result =
+        TrackedFileBuilder.dataManifest(100L)
+            .writerFormatVersion(WRITER_FORMAT_VERSION_V4)
+            .status(EntryStatus.EXISTING)
+            .dataSequenceNumber(7L)
+            .fileSequenceNumber(9L)
+            .firstRowId(1000L)
+            .location("s3://bucket/data/manifest.avro")
+            .fileFormat(FileFormat.AVRO)
+            .recordCount(420L)
+            .fileSizeInBytes(556L)
+            .partition(PARTITION_DATA)
+            .manifestInfo(MANIFEST_INFO)
+            .build();
+
+    assertThat(result.tracking().status()).isEqualTo(EntryStatus.EXISTING);
+    assertThat(result.tracking().snapshotId()).isEqualTo(100L);
+    assertThat(result.tracking().dataSequenceNumber()).isEqualTo(7L);
+    assertThat(result.tracking().fileSequenceNumber()).isEqualTo(9L);
+    assertThat(result.tracking().firstRowId()).isEqualTo(1000L);
+    assertThat(result.tracking().dvSnapshotId()).isNull();
+    assertThat(result.tracking().deletedPositions()).isNull();
+    assertThat(result.tracking().replacedPositions()).isNull();
+  }
+
+  @Test
+  public void explicitStatusRejectsNull() {
+    assertThatThrownBy(() -> TrackedFileBuilder.data(100L).status(null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("Invalid status: null");
+  }
+
+  @Test
+  public void explicitStatusCannotCombineWithDvUpdated() {
+    assertThatThrownBy(
+            () ->
+                TrackedFileBuilder.data(100L)
+                    .writerFormatVersion(WRITER_FORMAT_VERSION_V4)
+                    .status(EntryStatus.EXISTING)
+                    .dataSequenceNumber(7L)
+                    .fileSequenceNumber(9L)
+                    .deletionVector(DELETION_VECTOR)
+                    .location("s3://bucket/data/file.parquet")
+                    .fileFormat(FileFormat.PARQUET)
+                    .recordCount(2000L)
+                    .fileSizeInBytes(12345L)
+                    .partition(PARTITION_DATA)
+                    .build())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("Cannot combine explicit tracking fields with tracking mutators");
+  }
+
   private static Stream<Arguments> nonManifestSources() {
     return Stream.of(
         Arguments.of(sourceData(10L), FileContent.DATA),

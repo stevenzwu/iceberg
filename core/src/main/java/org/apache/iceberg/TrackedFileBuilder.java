@@ -46,6 +46,10 @@ class TrackedFileBuilder {
 
   // tracking-related fields
   private Tracking sourceTracking = null;
+  private EntryStatus explicitStatus = null;
+  private Long explicitDataSequenceNumber = null;
+  private Long explicitFileSequenceNumber = null;
+  private Long firstRowId = null;
   private boolean dvUpdated = false;
   private ByteBuffer deletedPositions = null;
   private ByteBuffer replacedPositions = null;
@@ -176,6 +180,46 @@ class TrackedFileBuilder {
         "Invalid writer format version: %s (must be >= 0)",
         newWriterFormatVersion);
     this.writerFormatVersion = newWriterFormatVersion;
+    return this;
+  }
+
+  TrackedFileBuilder firstRowId(Long newFirstRowId) {
+    this.firstRowId = newFirstRowId;
+    return this;
+  }
+
+  /**
+   * Sets an explicit {@link EntryStatus} for the tracking row, bypassing the {@link
+   * TrackingBuilder#added(long)} / {@link TrackingBuilder#from(Tracking, long)} status-derivation
+   * path. Required when paired with {@link #dataSequenceNumber(Long)} / {@link
+   * #fileSequenceNumber(Long)} for manifest references and non-ADDED transitions whose tracking
+   * values can't be derived from a source.
+   *
+   * <p>When this setter is used, {@link #build()} constructs the {@link Tracking} directly from the
+   * accumulated field values and bypasses {@link TrackingBuilder}. Cannot be combined with the
+   * source-tracking path ({@link #from(TrackedFile, long)}).
+   */
+  TrackedFileBuilder status(EntryStatus newStatus) {
+    Preconditions.checkArgument(newStatus != null, "Invalid status: null");
+    this.explicitStatus = newStatus;
+    return this;
+  }
+
+  /**
+   * Sets an explicit data sequence number for the tracking row. Must be paired with {@link
+   * #status(EntryStatus)} — implies the explicit-tracking path.
+   */
+  TrackedFileBuilder dataSequenceNumber(Long newDataSequenceNumber) {
+    this.explicitDataSequenceNumber = newDataSequenceNumber;
+    return this;
+  }
+
+  /**
+   * Sets an explicit file sequence number for the tracking row. Must be paired with {@link
+   * #status(EntryStatus)} — implies the explicit-tracking path.
+   */
+  TrackedFileBuilder fileSequenceNumber(Long newFileSequenceNumber) {
+    this.explicitFileSequenceNumber = newFileSequenceNumber;
     return this;
   }
 
@@ -326,25 +370,53 @@ class TrackedFileBuilder {
         contentType != FileContent.EQUALITY_DELETES || equalityIds != null,
         "Missing required field: equality IDs");
 
-    TrackingBuilder trackingBuilder =
-        sourceTracking == null
-            ? TrackingBuilder.added(snapshotId)
-            : TrackingBuilder.from(sourceTracking, snapshotId);
+    Tracking trackingResult;
+    if (explicitStatus != null) {
+      Preconditions.checkState(
+          sourceTracking == null,
+          "Cannot combine explicit tracking fields with source-tracking path "
+              + "(from(TrackedFile, long))");
+      Preconditions.checkState(
+          !dvUpdated && deletedPositions == null && replacedPositions == null,
+          "Cannot combine explicit tracking fields with tracking mutators "
+              + "(dvUpdated/deletedPositions/replacedPositions)");
+      trackingResult =
+          new TrackingStruct(
+              explicitStatus,
+              snapshotId,
+              explicitDataSequenceNumber,
+              explicitFileSequenceNumber,
+              null /* dvSnapshotId */,
+              firstRowId,
+              null /* deletedPositions */,
+              null /* replacedPositions */);
+    } else {
+      TrackingBuilder trackingBuilder =
+          sourceTracking == null
+              ? TrackingBuilder.added(snapshotId)
+              : TrackingBuilder.from(sourceTracking, snapshotId);
 
-    if (dvUpdated) {
-      trackingBuilder.dvUpdated();
-    }
+      if (dvUpdated) {
+        trackingBuilder.dvUpdated();
+      }
 
-    if (deletedPositions != null) {
-      trackingBuilder.deletedPositions(deletedPositions);
-    }
+      if (deletedPositions != null) {
+        trackingBuilder.deletedPositions(deletedPositions);
+      }
 
-    if (replacedPositions != null) {
-      trackingBuilder.replacedPositions(replacedPositions);
+      if (replacedPositions != null) {
+        trackingBuilder.replacedPositions(replacedPositions);
+      }
+
+      if (firstRowId != null) {
+        trackingBuilder.firstRowId(firstRowId);
+      }
+
+      trackingResult = trackingBuilder.build();
     }
 
     return new TrackedFileStruct(
-        trackingBuilder.build(),
+        trackingResult,
         contentType,
         writerFormatVersion,
         location,
