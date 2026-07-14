@@ -66,8 +66,25 @@ public class BaseRowDelta extends MergingSnapshotProducer<RowDelta> implements R
   }
 
   @Override
+  public RowDelta addRows(DataFile inserts, DeletionVector dv) {
+    Preconditions.checkArgument(inserts != null, "Invalid data file: null");
+    Preconditions.checkArgument(dv != null, "Invalid deletion vector: null");
+    add(inserts);
+    add(toDVDeleteFile(inserts, dv));
+    return this;
+  }
+
+  @Override
   public RowDelta addDeletes(DeleteFile deletes) {
     add(deletes);
+    return this;
+  }
+
+  @Override
+  public RowDelta updateDV(DataFile target, DeletionVector newDV) {
+    Preconditions.checkArgument(target != null, "Invalid target data file: null");
+    Preconditions.checkArgument(newDV != null, "Invalid deletion vector: null");
+    add(toDVDeleteFile(target, newDV));
     return this;
   }
 

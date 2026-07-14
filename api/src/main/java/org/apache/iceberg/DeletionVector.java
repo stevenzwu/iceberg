@@ -26,7 +26,7 @@ import org.apache.iceberg.types.Types;
  * <p>Tracks where a DV blob can be read. The DV blob follows the format defined by the
  * deletion-vector-v1 blob type in the Puffin spec.
  */
-interface DeletionVector {
+public interface DeletionVector {
   Types.NestedField LOCATION =
       Types.NestedField.required(
           155, "location", Types.StringType.get(), "Location of the file containing the DV");
@@ -64,4 +64,16 @@ interface DeletionVector {
 
   /** Copies this deletion vector. */
   DeletionVector copy();
+
+  /**
+   * Creates a new deletion vector from the given metadata.
+   *
+   * @param location location of the file containing the DV blob
+   * @param offset byte offset in the file where the DV content starts
+   * @param sizeInBytes size in bytes of the DV content
+   * @param cardinality number of deleted rows encoded in the DV
+   */
+  static DeletionVector of(String location, long offset, long sizeInBytes, long cardinality) {
+    return new BaseDeletionVector(location, offset, sizeInBytes, cardinality);
+  }
 }

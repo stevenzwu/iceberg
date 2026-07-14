@@ -699,4 +699,115 @@ public class TestV4ColocatedDV {
         .as("first-time DV add must not surface any removed delete files via deprecated API")
         .isEmpty();
   }
+
+  // Builds a public DeletionVector from the puffin metadata of a generated DV DeleteFile.
+  private static DeletionVector dvOf(DeleteFile dv) {
+    return DeletionVector.of(
+        dv.location().toString(), dv.contentOffset(), dv.contentSizeInBytes(), dv.recordCount());
+  }
+
+  /**
+   * {@code RowDelta.addRows(DataFile, DeletionVector)} produces a single ADDED entry with the DV
+   * embedded — matches the born-with-DV flow committed via {@code addRows + addDeletes}.
+   */
+  @Test
+  public void testAddRowsWithDVOverload() throws IOException {
+    DeleteFile dv = FileGenerationUtil.generateDV(table, FILE_A);
+    table.newRowDelta().addRows(FILE_A, dvOf(dv)).commit();
+    Snapshot snap = table.currentSnapshot();
+
+    assertThat(snap.deleteManifests(table.io()))
+        .as("born-with-DV must not produce a separate position-delete manifest")
+        .isEmpty();
+
+    List<ManifestFile> dataManifests = snap.dataManifests(table.io());
+    assertThat(dataManifests).hasSize(1);
+
+    List<TrackedFileStruct> rows = readLeafRows(dataManifests.get(0));
+    assertThat(rows).as("born-with-DV must produce exactly one row").hasSize(1);
+
+    TrackedFileStruct row = rows.get(0);
+    assertThat(row.tracking().status())
+        .as("born-with-DV entry must be ADDED")
+        .isEqualTo(EntryStatus.ADDED);
+    assertThat(row.location()).isEqualTo(FILE_A.location());
+    assertThat(row.deletionVector())
+        .as("born-with-DV ADDED row must carry an embedded deletion_vector")
+        .isNotNull();
+    assertThat(row.deletionVector().location())
+        .as("embedded DV location must match the committed DV")
+        .isEqualTo(dv.location());
+  }
+
+  /**
+   * {@code RowDelta.updateDV(DataFile, DeletionVector)} rewrites the target file's leaf manifest
+   * with a REPLACED/MODIFIED pair carrying the new DV — matches the DV-update flow committed via
+   * {@code addDeletes(DeleteFile)}.
+   */
+  @Test
+  public void testUpdateDVOverload() throws IOException {
+    table.newAppend().appendFile(FILE_A).commit();
+
+    DeleteFile dv = FileGenerationUtil.generateDV(table, FILE_A);
+    table.newRowDelta().updateDV(FILE_A, dvOf(dv)).commit();
+    Snapshot snap = table.currentSnapshot();
+
+    assertThat(snap.deleteManifests(table.io()))
+        .as("colocated DV update must not produce a position-delete manifest")
+        .isEmpty();
+
+    List<ManifestFile> dataManifests = snap.dataManifests(table.io());
+    assertThat(dataManifests).hasSize(1);
+
+    List<TrackedFileStruct> rows = readLeafRows(dataManifests.get(0));
+    assertThat(rows).as("REPLACED + MODIFIED = 2 rows").hasSize(2);
+
+    TrackedFileStruct replacedRow = null;
+    TrackedFileStruct modifiedRow = null;
+    for (TrackedFileStruct row : rows) {
+      if (row.tracking().status() == EntryStatus.REPLACED) {
+        replacedRow = row;
+      } else if (row.tracking().status() == EntryStatus.MODIFIED) {
+        modifiedRow = row;
+      }
+    }
+
+    assertThat(replacedRow).as("must have a REPLACED row for FILE_A").isNotNull();
+    assertThat(modifiedRow).as("must have a MODIFIED row for FILE_A").isNotNull();
+    assertThat(modifiedRow.deletionVector())
+        .as("MODIFIED row must carry an embedded deletion_vector")
+        .isNotNull();
+    assertThat(modifiedRow.deletionVector().location())
+        .as("embedded DV location must match the committed DV")
+        .isEqualTo(dv.location());
+  }
+
+  /**
+   * {@code AppendFiles.appendFile(DataFile, DeletionVector)} on {@link MergeAppend} produces a
+   * single ADDED entry with the DV embedded — an append of a file with a born-with-DV is still a
+   * pure append with no state transitions on existing files.
+   */
+  @Test
+  public void testAppendFileWithDVOverload() throws IOException {
+    DeleteFile dv = FileGenerationUtil.generateDV(table, FILE_A);
+    table.newAppend().appendFile(FILE_A, dvOf(dv)).commit();
+    Snapshot snap = table.currentSnapshot();
+
+    assertThat(snap.deleteManifests(table.io()))
+        .as("born-with-DV append must not produce a position-delete manifest")
+        .isEmpty();
+
+    List<ManifestFile> dataManifests = snap.dataManifests(table.io());
+    assertThat(dataManifests).hasSize(1);
+
+    List<TrackedFileStruct> rows = readLeafRows(dataManifests.get(0));
+    assertThat(rows).as("born-with-DV append must produce exactly one row").hasSize(1);
+    assertThat(rows.get(0).tracking().status())
+        .as("born-with-DV append entry must be ADDED")
+        .isEqualTo(EntryStatus.ADDED);
+    assertThat(rows.get(0).deletionVector())
+        .as("born-with-DV ADDED row must carry an embedded deletion_vector")
+        .isNotNull();
+    assertThat(rows.get(0).deletionVector().location()).isEqualTo(dv.location());
+  }
 }

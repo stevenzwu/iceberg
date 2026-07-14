@@ -37,6 +37,22 @@ public interface AppendFiles extends SnapshotUpdate<AppendFiles> {
   AppendFiles appendFile(DataFile file);
 
   /**
+   * Append a {@link DataFile} to the table along with a deletion vector that applies to it.
+   *
+   * <p>Use this overload for a born-with-DV data file: the file is committed with an already-known
+   * set of deleted row positions encoded in the deletion vector. An append of a file with a DV is
+   * still a pure append — no state transitions are applied to existing files.
+   *
+   * @param file a data file
+   * @param dv the deletion vector to apply to the appended data file
+   * @return this for method chaining
+   */
+  default AppendFiles appendFile(DataFile file, DeletionVector dv) {
+    throw new UnsupportedOperationException(
+        getClass().getName() + " does not implement appendFile(DataFile, DeletionVector)");
+  }
+
+  /**
    * Append a {@link ManifestFile} to the table.
    *
    * <p>The manifest must contain only appended files. All files in the manifest will be appended to

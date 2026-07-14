@@ -39,12 +39,38 @@ public interface RowDelta extends SnapshotUpdate<RowDelta> {
   RowDelta addRows(DataFile inserts);
 
   /**
+   * Add a {@link DataFile} to the table along with a deletion vector that applies to it.
+   *
+   * <p>Use this overload for a born-with-DV data file: the file is committed with an already-known
+   * set of deleted row positions encoded in the deletion vector.
+   *
+   * @param inserts a data file of rows to insert
+   * @param dv the deletion vector to apply to the inserted data file
+   * @return this for method chaining
+   */
+  default RowDelta addRows(DataFile inserts, DeletionVector dv) {
+    throw new UnsupportedOperationException(
+        getClass().getName() + " does not implement addRows(DataFile, DeletionVector)");
+  }
+
+  /**
    * Add a {@link DeleteFile} to the table.
    *
    * @param deletes a delete file of rows to delete
    * @return this for method chaining
    */
   RowDelta addDeletes(DeleteFile deletes);
+
+  /**
+   * Updates the deletion vector on an existing data file in the table.
+   *
+   * @param target the existing data file whose deletion vector is being updated
+   * @param newDV the new deletion vector to apply to the target
+   * @return this for method chaining
+   */
+  default RowDelta updateDV(DataFile target, DeletionVector newDV) {
+    throw new UnsupportedOperationException(getClass().getName() + " does not implement updateDV");
+  }
 
   /**
    * Remove a {@link DataFile} from the table.

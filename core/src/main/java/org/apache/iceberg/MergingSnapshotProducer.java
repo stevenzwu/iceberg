@@ -1567,6 +1567,32 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
     return manifest.hasAddedFiles() || manifest.hasExistingFiles();
   }
 
+  // Wraps a client-supplied DeletionVector as an internal DV DeleteFile referencing the given
+  // target data file. The DeleteFile is only used for internal routing through
+  // dvsByReferencedFile; for v4 tables it is collapsed into the data manifest and never written
+  // as a standalone delete manifest, so fileSizeInBytes is set to the DV blob size as a stub.
+  protected DeleteFile toDVDeleteFile(DataFile target, DeletionVector dv) {
+    Preconditions.checkArgument(target != null, "Invalid target data file: null");
+    Preconditions.checkArgument(dv != null, "Invalid deletion vector: null");
+    PartitionSpec spec = spec(target.specId());
+    Preconditions.checkArgument(
+        spec != null,
+        "Cannot find partition spec %s for data file: %s",
+        target.specId(),
+        target.location());
+    return FileMetadata.deleteFileBuilder(spec)
+        .ofPositionDeletes()
+        .withFormat(FileFormat.PUFFIN)
+        .withPath(dv.location())
+        .withPartition(target.partition())
+        .withFileSizeInBytes(dv.sizeInBytes())
+        .withReferencedDataFile(target.location())
+        .withContentOffset(dv.offset())
+        .withContentSizeInBytes(dv.sizeInBytes())
+        .withRecordCount(dv.cardinality())
+        .build();
+  }
+
   // Build a DeletionVectorStruct from a DV DeleteFile's Puffin blob reference.
   private static DeletionVector toDeletionVector(DeleteFile dv) {
     Preconditions.checkArgument(

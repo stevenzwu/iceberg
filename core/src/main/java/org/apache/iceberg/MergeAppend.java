@@ -43,6 +43,15 @@ class MergeAppend extends MergingSnapshotProducer<AppendFiles> implements Append
   }
 
   @Override
+  public MergeAppend appendFile(DataFile file, DeletionVector dv) {
+    Preconditions.checkArgument(file != null, "Invalid data file: null");
+    Preconditions.checkArgument(dv != null, "Invalid deletion vector: null");
+    add(file);
+    add(toDVDeleteFile(file, dv));
+    return this;
+  }
+
+  @Override
   public MergeAppend toBranch(String branch) {
     targetBranch(branch);
     return this;
