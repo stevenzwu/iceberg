@@ -19,8 +19,6 @@
 package org.apache.iceberg;
 
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.types.Types;
@@ -39,20 +37,12 @@ import org.openjdk.jmh.annotations.Warmup;
 import org.openjdk.jmh.infra.Blackhole;
 
 /**
- * Measures the per-manifest-entry overhead of preserving the legacy {@code null}-when-empty
- * contract on the read path when presenting {@link ContentStats} as the five legacy stat maps.
- *
- * <p>The variants build the five {@link ContentStatsBackedMap} views a read-direction adapter
- * returns for one entry. {@code emptyMap} returns each view directly (a present-but-empty view is a
- * non-null empty map). {@code nullWhenEmpty} runs a hand-inlined, allocation-free emptiness scan
- * per view and returns {@code null} when empty, matching what the eager converters returned. {@code
- * nullViaFactory} does the same through the production {@link ContentStatsBackedMap#forKind}
- * factory, so it should track {@code nullWhenEmpty}. {@code nullViaEntrySet} instead materializes
- * each view's {@code entrySet()} to decide emptiness — the naive check the {@code isEmpty()}
- * override and {@code forKind} avoid. Columns are {@code optional long}, so value/null counts and
- * bounds are present (their scan short-circuits on the first column) while {@code nan_value_count}
- * is tracked by no column — the realistic case for a table with no floating-point columns, where
- * the emptiness scan walks every column.
+ * Measures the per-manifest-entry cost of presenting a v4 {@link ContentStats} as the legacy
+ * per-column {@link ContentFile} stat maps. {@code emptyMap} builds the five {@link
+ * ContentStatsBackedMap} views directly (a present-but-empty view stays a non-null empty map);
+ * {@code nullViaFactory} builds them through {@link ContentStatsBackedMap#forKind}, which returns
+ * {@code null} for a metric no column tracks. Columns are {@code optional long}, so value/null
+ * counts and bounds are present while {@code nan_value_count} is tracked by no column.
  *
  * <p>Run: {@code ./gradlew :iceberg-core:jmh -PjmhIncludeRegex=ContentStatsMapNullabilityBenchmark}
  */
@@ -112,60 +102,11 @@ public class ContentStatsMapNullabilityBenchmark {
     }
   }
 
-  /** Preserve null-when-empty: pay an allocation-free emptiness scan per view to decide null. */
-  @Benchmark
-  public void nullWhenEmpty(Blackhole blackhole) {
-    for (ContentStatsBackedMap.Kind kind : KINDS) {
-      Map<Integer, ?> view = new ContentStatsBackedMap<>(stats, kind);
-      blackhole.consume(isEmptyView(kind) ? null : view);
-    }
-  }
-
   /** Preserve null-when-empty through the production factory: forKind runs the emptiness scan. */
   @Benchmark
   public void nullViaFactory(Blackhole blackhole) {
     for (ContentStatsBackedMap.Kind kind : KINDS) {
       blackhole.consume(ContentStatsBackedMap.forKind(kind, stats));
-    }
-  }
-
-  /** Naive null-when-empty: materialize entrySet() to decide emptiness (the pre-override cost). */
-  @Benchmark
-  public void nullViaEntrySet(Blackhole blackhole) {
-    for (ContentStatsBackedMap.Kind kind : KINDS) {
-      Map<Integer, ?> view = new ContentStatsBackedMap<>(stats, kind);
-      Set<?> entries = view.entrySet();
-      blackhole.consume(entries);
-      blackhole.consume(entries.isEmpty() ? null : view);
-    }
-  }
-
-  // Allocation-free (aside from the fieldStats iterator) emptiness probe: the proposed isEmpty()
-  // override. Short-circuits on the first column that contributes an entry for the kind.
-  private boolean isEmptyView(ContentStatsBackedMap.Kind kind) {
-    for (FieldStats<?> fs : stats.fieldStats()) {
-      if (contributes(fs, kind)) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  private boolean contributes(FieldStats<?> fs, ContentStatsBackedMap.Kind kind) {
-    switch (kind) {
-      case VALUE_COUNT:
-        return true;
-      case NULL_VALUE_COUNT:
-        return fs.hasNullCount();
-      case NAN_VALUE_COUNT:
-        return fs.hasNaNCount();
-      case LOWER_BOUND:
-        return fs.lowerBound() != null && fs.type().fieldType("lower_bound") != null;
-      case UPPER_BOUND:
-        return fs.upperBound() != null && fs.type().fieldType("upper_bound") != null;
-      default:
-        throw new IllegalArgumentException("Unknown content stats kind: " + kind);
     }
   }
 }
