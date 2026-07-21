@@ -64,6 +64,7 @@ configure(jmhProjects) {
     jmhVersion = '1.37'
     failOnError = true
     forceGC = true
+    profilers = ['gc']
     includeTests = true
     humanOutputFile = file(jmhOutputPath)
     jvmArgs = ['-Xmx32g']
