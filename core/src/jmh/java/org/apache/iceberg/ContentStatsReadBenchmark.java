@@ -19,10 +19,8 @@
 package org.apache.iceberg;
 
 import java.nio.ByteBuffer;
-import java.util.AbstractMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
@@ -44,9 +42,9 @@ import org.openjdk.jmh.annotations.Warmup;
 import org.openjdk.jmh.infra.Blackhole;
 
 /**
- * Read-path mirror of {@link ContentStatsBridgeBenchmark}: compares strategies for exposing a v4
- * manifest entry's {@link ContentStats} as the legacy {@link ContentFile} stat maps (valueCounts,
- * nullValueCounts, nanValueCounts, lowerBounds, upperBounds), once per manifest entry.
+ * Compares strategies for exposing a v4 manifest entry's {@link ContentStats} as the legacy {@link
+ * ContentFile} stat maps (valueCounts, nullValueCounts, nanValueCounts, lowerBounds, upperBounds),
+ * once per manifest entry.
  *
  * <p>A read-path {@code TrackedContentFile} must present the columnar v4 stats through the legacy
  * five-map API that scan planning and metrics evaluators consume. Two strategies:
@@ -68,7 +66,7 @@ import org.openjdk.jmh.infra.Blackhole;
  *
  * <p>Run: {@code ./gradlew :iceberg-core:jmh -PjmhIncludeRegex=ContentStatsReadBenchmark}
  */
-@Fork(1)
+@Fork(10)
 @State(Scope.Benchmark)
 @Warmup(iterations = 3, time = 3)
 @Measurement(iterations = 5, time = 3)
@@ -76,7 +74,19 @@ import org.openjdk.jmh.infra.Blackhole;
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 public class ContentStatsReadBenchmark {
 
-  @Param({"2", "10", "50", "200"})
+  // rotate a mix of column types so the bound encoding is polymorphic, not a single Long path
+  private static final Type[] COLUMN_TYPES = {
+    Types.BooleanType.get(),
+    Types.IntegerType.get(),
+    Types.LongType.get(),
+    Types.FloatType.get(),
+    Types.DoubleType.get(),
+    Types.StringType.get(),
+    Types.DateType.get(),
+    Types.TimestampType.withoutZone(),
+  };
+
+  @Param({"20", "100"})
   private int numColumns;
 
   private Schema schema;
@@ -86,10 +96,10 @@ public class ContentStatsReadBenchmark {
   private ContentStats sourceStats;
 
   @Setup(Level.Trial)
-  public void setup() {
+  public void setupBenchmark() {
     List<Types.NestedField> fields = Lists.newArrayListWithCapacity(numColumns);
     for (int i = 0; i < numColumns; i++) {
-      fields.add(Types.NestedField.optional(i + 1, "c" + i, Types.LongType.get()));
+      fields.add(Types.NestedField.optional(i + 1, "c" + i, COLUMN_TYPES[i % COLUMN_TYPES.length]));
     }
 
     this.schema = new Schema(fields);
@@ -102,18 +112,21 @@ public class ContentStatsReadBenchmark {
     Types.StructType statsReadSchema = StatsUtil.statsReadSchema(schema, ids);
     ContentStatsStruct stats = new ContentStatsStruct(statsReadSchema);
     for (int id = 1; id <= numColumns; id++) {
+      Type type = schema.findType(id);
       Types.StructType fieldStruct =
           statsReadSchema.field(StatsUtil.toBaseId(id)).type().asStructType();
+      boolean floating = type.typeId() == Type.TypeID.FLOAT || type.typeId() == Type.TypeID.DOUBLE;
+      Long nanValueCount = floating ? 0L : null;
       stats.setStats(
           id,
           new FieldStatsStruct<>(
               fieldStruct,
-              (long) id,
-              (long) (id + 1_000),
+              lowerBoundFor(type, id),
+              upperBoundFor(type, id),
               false,
               1_000L + id,
               (long) id,
-              0L,
+              nanValueCount,
               null));
     }
 
@@ -132,8 +145,14 @@ public class ContentStatsReadBenchmark {
       int id = fieldStats.fieldId();
       Type type = schema.findType(id);
       valueCounts.put(id, fieldStats.valueCount());
-      nullValueCounts.put(id, fieldStats.nullValueCount());
-      nanValueCounts.put(id, fieldStats.nanValueCount());
+      if (fieldStats.hasNullCount()) {
+        nullValueCounts.put(id, fieldStats.nullValueCount());
+      }
+
+      if (fieldStats.hasNaNCount()) {
+        nanValueCounts.put(id, fieldStats.nanValueCount());
+      }
+
       lowerBounds.put(id, Conversions.toByteBuffer(type, fieldStats.lowerBound()));
       upperBounds.put(id, Conversions.toByteBuffer(type, fieldStats.upperBound()));
     }
@@ -144,15 +163,15 @@ public class ContentStatsReadBenchmark {
   @Benchmark
   public void wrap(Blackhole blackhole) {
     Map<Integer, Long> valueCounts =
-        new ContentStatsBackedMap<>(sourceStats, schema, ContentStatsBackedMap.Kind.VALUE_COUNT);
+        new ContentStatsBackedMap<>(sourceStats, ContentStatsBackedMap.Kind.VALUE_COUNT);
     Map<Integer, Long> nullValueCounts =
-        new ContentStatsBackedMap<>(sourceStats, schema, ContentStatsBackedMap.Kind.NULL_COUNT);
+        new ContentStatsBackedMap<>(sourceStats, ContentStatsBackedMap.Kind.NULL_VALUE_COUNT);
     Map<Integer, Long> nanValueCounts =
-        new ContentStatsBackedMap<>(sourceStats, schema, ContentStatsBackedMap.Kind.NAN_COUNT);
+        new ContentStatsBackedMap<>(sourceStats, ContentStatsBackedMap.Kind.NAN_VALUE_COUNT);
     Map<Integer, ByteBuffer> lowerBounds =
-        new ContentStatsBackedMap<>(sourceStats, schema, ContentStatsBackedMap.Kind.LOWER_BOUND);
+        new ContentStatsBackedMap<>(sourceStats, ContentStatsBackedMap.Kind.LOWER_BOUND);
     Map<Integer, ByteBuffer> upperBounds =
-        new ContentStatsBackedMap<>(sourceStats, schema, ContentStatsBackedMap.Kind.UPPER_BOUND);
+        new ContentStatsBackedMap<>(sourceStats, ContentStatsBackedMap.Kind.UPPER_BOUND);
 
     readMaps(blackhole, valueCounts, nullValueCounts, nanValueCounts, lowerBounds, upperBounds);
   }
@@ -175,62 +194,45 @@ public class ContentStatsReadBenchmark {
     }
   }
 
-  /**
-   * A read-only legacy stat map ({@code Map<Integer, V>}) backed by {@link ContentStats}. Each
-   * {@link #get(Object)} resolves the field stats for the requested column id and projects the one
-   * stat this map exposes, decoding/encoding lazily and allocating nothing per row.
-   */
-  static final class ContentStatsBackedMap<V> extends AbstractMap<Integer, V> {
-    enum Kind {
-      VALUE_COUNT,
-      NULL_COUNT,
-      NAN_COUNT,
-      LOWER_BOUND,
-      UPPER_BOUND
+  private static Object lowerBoundFor(Type type, int id) {
+    switch (type.typeId()) {
+      case BOOLEAN:
+        return false;
+      case INTEGER:
+      case DATE:
+        return id;
+      case LONG:
+      case TIMESTAMP:
+        return (long) id;
+      case FLOAT:
+        return (float) id;
+      case DOUBLE:
+        return (double) id;
+      case STRING:
+        return "lo" + id;
+      default:
+        throw new IllegalArgumentException("Unsupported type: " + type);
     }
+  }
 
-    private final ContentStats stats;
-    private final Schema schema;
-    private final Kind kind;
-
-    ContentStatsBackedMap(ContentStats stats, Schema schema, Kind kind) {
-      this.stats = stats;
-      this.schema = schema;
-      this.kind = kind;
-    }
-
-    @Override
-    @SuppressWarnings("unchecked")
-    public V get(Object key) {
-      if (!(key instanceof Integer id)) {
-        return null;
-      }
-
-      FieldStats<?> fieldStats = stats.statsFor(id);
-      if (fieldStats == null) {
-        return null;
-      }
-
-      return switch (kind) {
-        case VALUE_COUNT -> (V) Long.valueOf(fieldStats.valueCount());
-        case NULL_COUNT -> (V) Long.valueOf(fieldStats.nullValueCount());
-        case NAN_COUNT -> (V) Long.valueOf(fieldStats.nanValueCount());
-        case LOWER_BOUND ->
-            (V) Conversions.toByteBuffer(schema.findType(id), fieldStats.lowerBound());
-        case UPPER_BOUND ->
-            (V) Conversions.toByteBuffer(schema.findType(id), fieldStats.upperBound());
-      };
-    }
-
-    @Override
-    public Set<Entry<Integer, V>> entrySet() {
-      Map<Integer, V> materialized = Maps.newLinkedHashMap();
-      for (FieldStats<?> fieldStats : stats.fieldStats()) {
-        int id = fieldStats.fieldId();
-        materialized.put(id, get(id));
-      }
-
-      return materialized.entrySet();
+  private static Object upperBoundFor(Type type, int id) {
+    switch (type.typeId()) {
+      case BOOLEAN:
+        return true;
+      case INTEGER:
+      case DATE:
+        return id + 1_000;
+      case LONG:
+      case TIMESTAMP:
+        return (long) (id + 1_000);
+      case FLOAT:
+        return (float) (id + 1_000);
+      case DOUBLE:
+        return (double) (id + 1_000);
+      case STRING:
+        return "up" + id;
+      default:
+        throw new IllegalArgumentException("Unsupported type: " + type);
     }
   }
 }

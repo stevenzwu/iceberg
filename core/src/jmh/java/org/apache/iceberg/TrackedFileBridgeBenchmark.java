@@ -83,7 +83,7 @@ public class TrackedFileBridgeBenchmark {
   private DataTrackedFile reusableWrapper;
 
   @Setup(Level.Trial)
-  public void setup() {
+  public void setupBenchmark() {
     this.schema =
         new Schema(
             Types.NestedField.required(1, "id", Types.LongType.get()),

@@ -110,7 +110,7 @@ public class TrackedFileWithStatsBenchmark {
   private MapBackedContentStats reusableStats;
 
   @Setup(Level.Trial)
-  public void setup() {
+  public void setupBenchmark() {
     List<Types.NestedField> fields = Lists.newArrayListWithCapacity(numColumns);
     for (int i = 0; i < numColumns; i++) {
       fields.add(Types.NestedField.optional(i + 1, "c" + i, Types.LongType.get()));
