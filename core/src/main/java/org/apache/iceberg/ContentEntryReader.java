@@ -229,17 +229,24 @@ class ContentEntryReader extends CloseableGroup {
 
   private CloseableIterable<Pair<ManifestEntry.Status, DeleteFile>> readDVChanges() {
     PartitionSpec defaultSpec = resolveDefaultSpec();
-    Schema contentEntrySchema = buildContentEntrySchema(defaultSpec);
+    Types.StructType statsType =
+        StatsUtil.statsReadSchema(
+            defaultSpec.schema(), TypeUtil.getProjectedIds(defaultSpec.schema()));
+    Schema contentEntrySchema = buildContentEntrySchema(defaultSpec, statsType);
 
-    CloseableIterable<TrackedFileStruct> rows =
+    InternalData.ReadBuilder builder =
         InternalData.read(FileFormat.PARQUET, file)
             .project(contentEntrySchema)
             .setRootType(TrackedFileStruct.class)
             .setCustomType(TrackedFile.TRACKING.fieldId(), TrackingStruct.class)
             .setCustomType(TrackedFile.PARTITION_ID, PartitionData.class)
-            .setCustomType(TrackedFile.CONTENT_STATS_ID, ContentStatsReader.class)
-            .setCustomType(TrackedFile.DELETION_VECTOR.fieldId(), DeletionVectorStruct.class)
-            .build();
+            .setCustomType(TrackedFile.CONTENT_STATS_ID, ContentStatsStruct.class)
+            .setCustomType(TrackedFile.DELETION_VECTOR.fieldId(), DeletionVectorStruct.class);
+    for (Types.NestedField statsField : statsType.fields()) {
+      builder.setCustomType(statsField.fieldId(), FieldStatsStruct.class);
+    }
+
+    CloseableIterable<TrackedFileStruct> rows = builder.build();
 
     addCloseable(rows);
 
@@ -260,17 +267,24 @@ class ContentEntryReader extends CloseableGroup {
 
   private CloseableIterable<Pair<EntryStatus, DataFile>> readDataFileChanges() {
     PartitionSpec defaultSpec = resolveDefaultSpec();
-    Schema contentEntrySchema = buildContentEntrySchema(defaultSpec);
+    Types.StructType statsType =
+        StatsUtil.statsReadSchema(
+            defaultSpec.schema(), TypeUtil.getProjectedIds(defaultSpec.schema()));
+    Schema contentEntrySchema = buildContentEntrySchema(defaultSpec, statsType);
 
-    CloseableIterable<TrackedFileStruct> rows =
+    InternalData.ReadBuilder builder =
         InternalData.read(FileFormat.PARQUET, file)
             .project(contentEntrySchema)
             .setRootType(TrackedFileStruct.class)
             .setCustomType(TrackedFile.TRACKING.fieldId(), TrackingStruct.class)
             .setCustomType(TrackedFile.PARTITION_ID, PartitionData.class)
-            .setCustomType(TrackedFile.CONTENT_STATS_ID, ContentStatsReader.class)
-            .setCustomType(TrackedFile.DELETION_VECTOR.fieldId(), DeletionVectorStruct.class)
-            .build();
+            .setCustomType(TrackedFile.CONTENT_STATS_ID, ContentStatsStruct.class)
+            .setCustomType(TrackedFile.DELETION_VECTOR.fieldId(), DeletionVectorStruct.class);
+    for (Types.NestedField statsField : statsType.fields()) {
+      builder.setCustomType(statsField.fieldId(), FieldStatsStruct.class);
+    }
+
+    CloseableIterable<TrackedFileStruct> rows = builder.build();
 
     addCloseable(rows);
 
