@@ -18,6 +18,7 @@
  */
 package org.apache.iceberg;
 
+import static org.apache.iceberg.types.Types.NestedField.optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -31,10 +32,11 @@ import org.apache.iceberg.types.Types;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.FieldSource;
 
 class TestTrackedFileAdapters {
 
-  private static final int WRITER_FORMAT_VERSION = 4;
+  private static final int FORMAT_VERSION_V4 = 4;
   private static final String MANIFEST_LOCATION = "s3://bucket/table/manifest.parquet";
   private static final String DATA_FILE_LOCATION = "s3://bucket/data/file.parquet";
   private static final String DV_LOCATION = "s3://bucket/puffin/dv-file.bin";
@@ -57,58 +59,160 @@ class TestTrackedFileAdapters {
           .identity("category")
           .withSpecId(PARTITIONED_SPEC_ID)
           .build();
+  private static final PartitionData PARTITION = partition("books");
 
-  // Passed for unpartitioned test files, where there is no partition tuple.
-  private static final PartitionData NO_PARTITION = null;
-
-  // Tracking field ordinals, looked up from the schema so the tests do not hard-code offsets.
-  private static final int STATUS_ORDINAL = ordinalOf(Tracking.schema(), "status");
-  private static final int SNAPSHOT_ID_ORDINAL = ordinalOf(Tracking.schema(), "snapshot_id");
-  private static final int DATA_SEQUENCE_NUMBER_ORDINAL =
-      ordinalOf(Tracking.schema(), "sequence_number");
-  private static final int FILE_SEQUENCE_NUMBER_ORDINAL =
-      ordinalOf(Tracking.schema(), "file_sequence_number");
-  private static final int FIRST_ROW_ID_ORDINAL = ordinalOf(Tracking.schema(), "first_row_id");
-  // manifestPos is appended after the tracking schema fields by the manifest reader.
+  // manifestPos is populated by readers using the setter with the position of the field.
   private static final int MANIFEST_POS_ORDINAL = Tracking.schema().fields().size();
 
-  // TrackedFile optional field ordinals, looked up from the schema.
-  private static final Types.StructType TRACKED_FILE_SCHEMA =
-      TrackedFile.schemaWithContentStats(Types.StructType.of(), Types.StructType.of());
-  private static final int SPEC_ID_ORDINAL = ordinalOf(TRACKED_FILE_SCHEMA, "spec_id");
-  private static final int CONTENT_STATS_ORDINAL = ordinalOf(TRACKED_FILE_SCHEMA, "content_stats");
-  private static final int SORT_ORDER_ID_ORDINAL = ordinalOf(TRACKED_FILE_SCHEMA, "sort_order_id");
-  private static final int DELETION_VECTOR_ORDINAL =
-      ordinalOf(TRACKED_FILE_SCHEMA, "deletion_vector");
-  private static final int KEY_METADATA_ORDINAL = ordinalOf(TRACKED_FILE_SCHEMA, "key_metadata");
-  private static final int SPLIT_OFFSETS_ORDINAL = ordinalOf(TRACKED_FILE_SCHEMA, "split_offsets");
-  private static final int EQUALITY_IDS_ORDINAL = ordinalOf(TRACKED_FILE_SCHEMA, "equality_ids");
+  private static final Schema STATS_SCHEMA =
+      new Schema(
+          optional(1, "id", Types.IntegerType.get()), optional(2, "score", Types.FloatType.get()));
+  private static final Types.StructType CONTENT_STATS_TYPE =
+      StatsUtil.statsReadSchema(STATS_SCHEMA, ImmutableList.of(1, 2));
+  private static final FieldStats<Integer> ID_STATS =
+      new FieldStatsStruct<>(
+          CONTENT_STATS_TYPE.fieldType("id").asStructType(), 1, 1000, true, 100L, 5L, 0L, null);
+  private static final FieldStats<Float> SCORE_STATS =
+      new FieldStatsStruct<>(
+          CONTENT_STATS_TYPE.fieldType("score").asStructType(),
+          1.0f,
+          100.0f,
+          true,
+          100L,
+          10L,
+          3L,
+          null);
+  private static final ContentStatsStruct CONTENT_STATS =
+      new ContentStatsStruct(CONTENT_STATS_TYPE);
+
+  static {
+    CONTENT_STATS.setStats(1, ID_STATS);
+    CONTENT_STATS.setStats(2, SCORE_STATS);
+  }
+
+  private static final Schema TABLE_SCHEMA =
+      new Schema(
+          Types.NestedField.required(1, "id", Types.IntegerType.get()),
+          Types.NestedField.required(2, "data", Types.StringType.get()));
+  private static final MetricsConfig METRICS_CONFIG =
+      MetricsConfig.from(ImmutableMap.of(), TABLE_SCHEMA, SortOrder.unsorted());
+  private static final PartitionSpec UNPARTITIONED_SPEC = PartitionSpec.unpartitioned();
+  private static final PartitionData EMPTY_PARTITION_DATA =
+      new PartitionData(UNPARTITIONED_SPEC.partitionType());
+  private static final Types.StructType PARTITION_TYPE = UNPARTITIONED_SPEC.partitionType();
+  private static final long SNAPSHOT_ID = 42L;
+  private static final long DATA_SEQ = 7L;
+  private static final long FILE_SEQ = 11L;
+  private static final String DATA_PATH = "s3://bucket/data/file.parquet";
+  private static final String DELETE_PATH = "s3://bucket/data/eq-delete.parquet";
+  private static final String MANIFEST_PATH = "s3://bucket/metadata/manifest.parquet";
+
+  private static final Metrics METRICS_WITH_BOUNDS =
+      new Metrics(
+          100L,
+          ImmutableMap.of(1, 16L, 2, 64L),
+          ImmutableMap.of(1, 100L, 2, 100L),
+          ImmutableMap.of(1, 0L, 2, 5L),
+          ImmutableMap.of(),
+          ImmutableMap.of(1, Conversions.toByteBuffer(Types.IntegerType.get(), 1)),
+          ImmutableMap.of(1, Conversions.toByteBuffer(Types.IntegerType.get(), 1000)));
+
+  private static final Tracking ADDED_TRACKING = TrackingBuilder.added(SNAPSHOT_ID).build();
+  private static final Tracking EXISTING_TRACKING =
+      new TrackingStruct(
+          EntryStatus.EXISTING, SNAPSHOT_ID, DATA_SEQ, FILE_SEQ, null, null, null, null);
+  private static final Tracking DELETED_TRACKING =
+      new TrackingStruct(
+          EntryStatus.DELETED, SNAPSHOT_ID, DATA_SEQ, FILE_SEQ, null, null, null, null);
+
+  private static final DataFile DATA_FILE =
+      new GenericDataFile(
+          UNPARTITIONED_SPEC.specId(),
+          DATA_PATH,
+          FileFormat.PARQUET,
+          EMPTY_PARTITION_DATA,
+          1024L,
+          new Metrics(100L, null, null, null, null),
+          null,
+          ImmutableList.of(0L),
+          null,
+          null);
+  private static final DataFile DATA_FILE_WITH_METRICS =
+      new GenericDataFile(
+          UNPARTITIONED_SPEC.specId(),
+          DATA_PATH,
+          FileFormat.PARQUET,
+          EMPTY_PARTITION_DATA,
+          1024L,
+          METRICS_WITH_BOUNDS,
+          null,
+          ImmutableList.of(0L),
+          null,
+          null);
+  private static final DeleteFile EQUALITY_DELETE_FILE =
+      new GenericDeleteFile(
+          UNPARTITIONED_SPEC.specId(),
+          FileContent.EQUALITY_DELETES,
+          DELETE_PATH,
+          FileFormat.PARQUET,
+          EMPTY_PARTITION_DATA,
+          512L,
+          new Metrics(50L, null, null, null, null),
+          new int[] {1},
+          null,
+          null,
+          null,
+          null,
+          null,
+          null);
+
+  private static final DeletionVector DELETION_VECTOR =
+      DeletionVectorStruct.builder()
+          .location(DV_LOCATION)
+          .offset(128L)
+          .sizeInBytes(256L)
+          .cardinality(10L)
+          .build();
 
   @Test
   void testDataFileAdapterDelegation() {
-    PartitionData partition = partition("books");
+    TrackingStruct tracking =
+        new TrackingStruct(
+            EntryStatus.ADDED,
+            42L,
+            DATA_SEQUENCE_NUMBER,
+            FILE_SEQUENCE_NUMBER,
+            null,
+            FIRST_ROW_ID,
+            null,
+            null);
+    tracking.setManifestLocation(MANIFEST_LOCATION);
+    tracking.set(MANIFEST_POS_ORDINAL, MANIFEST_POS);
 
-    TrackedFileStruct file =
+    TrackedFile file =
         new TrackedFileStruct(
-            createTracking(),
+            tracking,
             FileContent.DATA,
-            WRITER_FORMAT_VERSION,
+            FORMAT_VERSION_V4,
             DATA_FILE_LOCATION,
             FileFormat.PARQUET,
-            partition,
+            PARTITION,
             100L,
-            1024L);
-    file.set(SPEC_ID_ORDINAL, PARTITIONED_SPEC_ID);
-    file.set(CONTENT_STATS_ORDINAL, createContentStats());
-    file.set(SORT_ORDER_ID_ORDINAL, 3);
-    file.set(KEY_METADATA_ORDINAL, ByteBuffer.wrap(new byte[] {1, 2, 3}));
-    file.set(SPLIT_OFFSETS_ORDINAL, ImmutableList.of(50L, 100L));
+            1024L,
+            PARTITIONED_SPEC_ID,
+            CONTENT_STATS,
+            3,
+            null,
+            null,
+            ByteBuffer.wrap(new byte[] {1, 2, 3}),
+            ImmutableList.of(50L, 100L),
+            null);
 
     DataFile dataFile = TrackedFileAdapters.asDataFile(file, specsById(PARTITIONED_SPEC));
 
     assertThat(dataFile.pos()).isEqualTo(MANIFEST_POS);
     assertThat(dataFile.specId()).isEqualTo(PARTITIONED_SPEC_ID);
-    assertThat(dataFile.partition()).isSameAs(partition);
+    assertThat(dataFile.partition()).isSameAs(PARTITION);
     assertThat(dataFile.content()).isEqualTo(FileContent.DATA);
     assertThat(dataFile.location()).isEqualTo(DATA_FILE_LOCATION);
     assertThat(dataFile.format()).isEqualTo(FileFormat.PARQUET);
@@ -123,7 +227,7 @@ class TestTrackedFileAdapters {
     assertThat(dataFile.manifestLocation()).isEqualTo(MANIFEST_LOCATION);
     assertThat(dataFile.equalityFieldIds()).isNull();
     assertThat(dataFile.columnSizes()).isNull();
-    assertThat(dataFile.valueCounts()).containsOnly(Map.entry(1, 100L), Map.entry(2, 200L));
+    assertThat(dataFile.valueCounts()).containsOnly(Map.entry(1, 100L), Map.entry(2, 100L));
     assertThat(dataFile.nullValueCounts()).containsOnly(Map.entry(1, 5L), Map.entry(2, 10L));
     assertThat(dataFile.nanValueCounts()).containsOnly(Map.entry(2, 3L));
     assertThat(dataFile.lowerBounds())
@@ -139,7 +243,7 @@ class TestTrackedFileAdapters {
   @ParameterizedTest
   @EnumSource(value = FileContent.class, mode = EnumSource.Mode.EXCLUDE, names = "DATA")
   void testDataFileAdapterRejectsNonDataContent(FileContent contentType) {
-    TrackedFileStruct file = trackedFile(contentType);
+    TrackedFileStruct file = dummyTrackedFile(contentType);
 
     assertThatThrownBy(() -> TrackedFileAdapters.asDataFile(file, UNPARTITIONED))
         .isInstanceOf(IllegalArgumentException.class)
@@ -148,31 +252,44 @@ class TestTrackedFileAdapters {
 
   @Test
   void testEqualityDeleteFileAdapterDelegation() {
-    PartitionData partition = partition("books");
+    TrackingStruct tracking =
+        new TrackingStruct(
+            EntryStatus.ADDED,
+            42L,
+            DATA_SEQUENCE_NUMBER,
+            FILE_SEQUENCE_NUMBER,
+            null,
+            FIRST_ROW_ID,
+            null,
+            null);
+    tracking.setManifestLocation(MANIFEST_LOCATION);
+    tracking.set(MANIFEST_POS_ORDINAL, MANIFEST_POS);
 
-    TrackedFileStruct file =
+    TrackedFile file =
         new TrackedFileStruct(
-            createTracking(),
+            tracking,
             FileContent.EQUALITY_DELETES,
-            WRITER_FORMAT_VERSION,
+            FORMAT_VERSION_V4,
             "s3://bucket/eq-delete.avro",
             FileFormat.AVRO,
-            partition,
+            PARTITION,
             50L,
-            512L);
-    file.set(SPEC_ID_ORDINAL, PARTITIONED_SPEC_ID);
-    file.set(CONTENT_STATS_ORDINAL, createContentStats());
-    file.set(SORT_ORDER_ID_ORDINAL, 5);
-    file.set(KEY_METADATA_ORDINAL, ByteBuffer.wrap(new byte[] {4, 5}));
-    file.set(SPLIT_OFFSETS_ORDINAL, ImmutableList.of(200L));
-    file.set(EQUALITY_IDS_ORDINAL, ImmutableList.of(1, 2, 3));
+            512L,
+            PARTITIONED_SPEC_ID,
+            CONTENT_STATS,
+            5,
+            null,
+            null,
+            ByteBuffer.wrap(new byte[] {4, 5}),
+            ImmutableList.of(200L),
+            ImmutableList.of(1, 2, 3));
 
     DeleteFile deleteFile =
         TrackedFileAdapters.asEqualityDeleteFile(file, specsById(PARTITIONED_SPEC));
 
     assertThat(deleteFile.pos()).isEqualTo(MANIFEST_POS);
     assertThat(deleteFile.specId()).isEqualTo(PARTITIONED_SPEC_ID);
-    assertThat(deleteFile.partition()).isSameAs(partition);
+    assertThat(deleteFile.partition()).isSameAs(PARTITION);
     assertThat(deleteFile.content()).isEqualTo(FileContent.EQUALITY_DELETES);
     assertThat(deleteFile.location()).isEqualTo("s3://bucket/eq-delete.avro");
     assertThat(deleteFile.format()).isEqualTo(FileFormat.AVRO);
@@ -187,7 +304,7 @@ class TestTrackedFileAdapters {
     assertThat(deleteFile.manifestLocation()).isEqualTo(MANIFEST_LOCATION);
     assertThat(deleteFile.equalityFieldIds()).containsExactly(1, 2, 3);
     assertThat(deleteFile.columnSizes()).isNull();
-    assertThat(deleteFile.valueCounts()).containsOnly(Map.entry(1, 100L), Map.entry(2, 200L));
+    assertThat(deleteFile.valueCounts()).containsOnly(Map.entry(1, 100L), Map.entry(2, 100L));
     assertThat(deleteFile.nullValueCounts()).containsOnly(Map.entry(1, 5L), Map.entry(2, 10L));
     assertThat(deleteFile.nanValueCounts()).containsOnly(Map.entry(2, 3L));
     assertThat(deleteFile.lowerBounds())
@@ -203,7 +320,7 @@ class TestTrackedFileAdapters {
   @ParameterizedTest
   @EnumSource(value = FileContent.class, mode = EnumSource.Mode.EXCLUDE, names = "EQUALITY_DELETES")
   void testEqualityDeleteFileAdapterRejectsNonEqualityContent(FileContent contentType) {
-    TrackedFileStruct file = trackedFile(contentType);
+    TrackedFileStruct file = dummyTrackedFile(contentType);
 
     assertThatThrownBy(() -> TrackedFileAdapters.asEqualityDeleteFile(file, UNPARTITIONED))
         .isInstanceOf(IllegalArgumentException.class)
@@ -220,19 +337,37 @@ class TestTrackedFileAdapters {
             .cardinality(10L)
             .build();
 
-    PartitionData partition = partition("books");
-    TrackedFileStruct file =
+    TrackingStruct tracking =
+        new TrackingStruct(
+            EntryStatus.ADDED,
+            42L,
+            DATA_SEQUENCE_NUMBER,
+            FILE_SEQUENCE_NUMBER,
+            42L,
+            FIRST_ROW_ID,
+            null,
+            null);
+    tracking.setManifestLocation(MANIFEST_LOCATION);
+    tracking.set(MANIFEST_POS_ORDINAL, MANIFEST_POS);
+
+    TrackedFile file =
         new TrackedFileStruct(
-            createTracking(),
+            tracking,
             FileContent.DATA,
-            WRITER_FORMAT_VERSION,
+            FORMAT_VERSION_V4,
             DATA_FILE_LOCATION,
             FileFormat.PARQUET,
-            partition,
+            PARTITION,
             100L,
-            1024L);
-    file.set(SPEC_ID_ORDINAL, PARTITIONED_SPEC_ID);
-    file.set(DELETION_VECTOR_ORDINAL, dv);
+            1024L,
+            PARTITIONED_SPEC_ID,
+            null,
+            null,
+            dv,
+            null,
+            null,
+            null,
+            null);
 
     DeleteFile dvFile = TrackedFileAdapters.asDVDeleteFile(file, specsById(PARTITIONED_SPEC));
 
@@ -251,7 +386,7 @@ class TestTrackedFileAdapters {
     // fields delegated from TrackedFile / Tracking
     assertThat(dvFile.pos()).isEqualTo(MANIFEST_POS);
     assertThat(dvFile.specId()).isEqualTo(PARTITIONED_SPEC_ID);
-    assertThat(dvFile.partition()).isSameAs(partition);
+    assertThat(dvFile.partition()).isSameAs(PARTITION);
     assertThat(dvFile.dataSequenceNumber()).isEqualTo(DATA_SEQUENCE_NUMBER);
     assertThat(dvFile.fileSequenceNumber()).isEqualTo(FILE_SEQUENCE_NUMBER);
     assertThat(dvFile.manifestLocation()).isEqualTo(MANIFEST_LOCATION);
@@ -273,7 +408,7 @@ class TestTrackedFileAdapters {
   @ParameterizedTest
   @EnumSource(value = FileContent.class, mode = EnumSource.Mode.EXCLUDE, names = "DATA")
   void testDVDeleteFileAdapterRejectsNonDataContent(FileContent contentType) {
-    TrackedFileStruct file = trackedFile(contentType);
+    TrackedFileStruct file = dummyTrackedFile(contentType);
 
     assertThatThrownBy(() -> TrackedFileAdapters.asDVDeleteFile(file, UNPARTITIONED))
         .isInstanceOf(IllegalArgumentException.class)
@@ -282,7 +417,7 @@ class TestTrackedFileAdapters {
 
   @Test
   void testDVDeleteFileAdapterRejectsNullDeletionVector() {
-    TrackedFileStruct file = trackedFile(FileContent.DATA);
+    TrackedFileStruct file = dummyTrackedFile(FileContent.DATA);
 
     assertThatThrownBy(() -> TrackedFileAdapters.asDVDeleteFile(file, UNPARTITIONED))
         .isInstanceOf(IllegalArgumentException.class)
@@ -291,7 +426,7 @@ class TestTrackedFileAdapters {
 
   @Test
   void testNullContentStatsReturnsNullStats() {
-    TrackedFileStruct file = trackedFile(FileContent.DATA);
+    TrackedFileStruct file = dummyTrackedFile(FileContent.DATA);
 
     DataFile dataFile = TrackedFileAdapters.asDataFile(file, UNPARTITIONED);
 
@@ -307,30 +442,46 @@ class TestTrackedFileAdapters {
     // Files read before manifest inheritance have no tracking; tracking-derived fields must be
     // null rather than throwing.
     assertNullTrackingFields(
-        TrackedFileAdapters.asDataFile(trackedFile(FileContent.DATA), UNPARTITIONED));
+        TrackedFileAdapters.asDataFile(dummyTrackedFile(FileContent.DATA), UNPARTITIONED));
     assertNullTrackingFields(
         TrackedFileAdapters.asEqualityDeleteFile(
-            trackedFile(FileContent.EQUALITY_DELETES), UNPARTITIONED));
+            dummyTrackedFile(FileContent.EQUALITY_DELETES), UNPARTITIONED));
 
-    TrackedFileStruct dvFile = trackedFile(FileContent.DATA);
-    dvFile.set(DELETION_VECTOR_ORDINAL, deletionVector());
-    assertNullTrackingFields(TrackedFileAdapters.asDVDeleteFile(dvFile, UNPARTITIONED));
+    TrackedFileStruct fileWithDV =
+        new TrackedFileStruct(
+            null,
+            FileContent.DATA,
+            0,
+            null,
+            null,
+            null,
+            0L,
+            0L,
+            null,
+            null,
+            null,
+            DELETION_VECTOR,
+            null,
+            null,
+            null,
+            null);
+    assertNullTrackingFields(TrackedFileAdapters.asDVDeleteFile(fileWithDV, UNPARTITIONED));
   }
 
   @Test
   void testUnpartitionedFilePartitionIsEmpty() {
-    TrackedFileStruct file = trackedFile(FileContent.DATA);
+    TrackedFileStruct file = dummyTrackedFile(FileContent.DATA);
 
     DataFile dataFile = TrackedFileAdapters.asDataFile(file, UNPARTITIONED);
 
     assertThat(dataFile.specId()).isEqualTo(UNPARTITIONED_SPEC_ID);
-    assertThat(dataFile.partition().size()).isEqualTo(0);
+    assertThat(dataFile.partition()).isEqualTo(PartitionData.EMPTY);
   }
 
   @Test
   void testNullSpecIdResolvesToUnpartitionedSpec() {
     PartitionSpec unpartitioned = PartitionSpec.builderFor(new Schema()).withSpecId(5).build();
-    TrackedFileStruct file = trackedFile(FileContent.DATA);
+    TrackedFileStruct file = dummyTrackedFile(FileContent.DATA);
 
     DataFile dataFile = TrackedFileAdapters.asDataFile(file, specsById(unpartitioned));
 
@@ -341,7 +492,7 @@ class TestTrackedFileAdapters {
   void testNullSpecIdThrowsWhenNoUnpartitionedSpec() {
     Schema schema = new Schema(Types.NestedField.required(1, "id", Types.IntegerType.get()));
     PartitionSpec partitioned = PartitionSpec.builderFor(schema).identity("id").build();
-    TrackedFileStruct file = trackedFile(FileContent.DATA);
+    TrackedFileStruct file = dummyTrackedFile(FileContent.DATA);
 
     assertThatThrownBy(() -> TrackedFileAdapters.asDataFile(file, specsById(partitioned)))
         .isInstanceOf(IllegalArgumentException.class)
@@ -350,8 +501,24 @@ class TestTrackedFileAdapters {
 
   @Test
   void testUnknownSpecIdThrows() {
-    TrackedFileStruct file = trackedFile(FileContent.DATA);
-    file.set(SPEC_ID_ORDINAL, 99);
+    TrackedFileStruct file =
+        new TrackedFileStruct(
+            null,
+            FileContent.DATA,
+            0,
+            null,
+            null,
+            null,
+            0L,
+            0L,
+            99,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null);
 
     assertThatThrownBy(() -> TrackedFileAdapters.asDataFile(file, ImmutableMap.of()))
         .isInstanceOf(IllegalArgumentException.class)
@@ -360,9 +527,25 @@ class TestTrackedFileAdapters {
 
   @Test
   void testSpecIdMismatchThrows() {
+    TrackedFileStruct file =
+        new TrackedFileStruct(
+            null,
+            FileContent.DATA,
+            0,
+            null,
+            null,
+            null,
+            0L,
+            0L,
+            PARTITIONED_SPEC_ID,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null);
     int mismatchedSpecId = PARTITIONED_SPEC_ID + 1;
-    TrackedFileStruct file = trackedFile(FileContent.DATA);
-    file.set(SPEC_ID_ORDINAL, PARTITIONED_SPEC_ID);
     PartitionSpec mismatched =
         PartitionSpec.builderFor(PARTITION_SCHEMA)
             .identity("category")
@@ -399,95 +582,427 @@ class TestTrackedFileAdapters {
   }
 
   /** Minimal file with no tracking, used by the rejection and null-tracking tests. */
-  private static TrackedFileStruct trackedFile(FileContent contentType) {
+  private static TrackedFileStruct dummyTrackedFile(FileContent contentType) {
     return new TrackedFileStruct(
         null,
         contentType,
-        WRITER_FORMAT_VERSION,
-        "s3://bucket/file",
+        FORMAT_VERSION_V4,
+        DATA_FILE_LOCATION,
         FileFormat.PARQUET,
-        NO_PARTITION,
+        null,
         1L,
-        1L);
+        1L,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null);
   }
 
-  private static TrackingStruct createTracking() {
-    TrackingStruct tracking = new TrackingStruct();
-    tracking.set(STATUS_ORDINAL, EntryStatus.ADDED.id());
-    tracking.set(SNAPSHOT_ID_ORDINAL, 42L);
-    tracking.set(DATA_SEQUENCE_NUMBER_ORDINAL, DATA_SEQUENCE_NUMBER);
-    tracking.set(FILE_SEQUENCE_NUMBER_ORDINAL, FILE_SEQUENCE_NUMBER);
-    tracking.set(FIRST_ROW_ID_ORDINAL, FIRST_ROW_ID);
-    tracking.setManifestLocation(MANIFEST_LOCATION);
-    tracking.set(MANIFEST_POS_ORDINAL, MANIFEST_POS);
-    return tracking;
+  @ParameterizedTest
+  @FieldSource("org.apache.iceberg.TestHelpers#V4_AND_ABOVE")
+  void testDataFileWrapperAdded(int formatVersion) {
+    DataFile file = DATA_FILE;
+    TrackedFileAdapters.DataTrackedFile wrapper =
+        TrackedFileAdapters.forDataFile(
+            formatVersion, TABLE_SCHEMA, METRICS_CONFIG, PARTITION_TYPE);
+    TrackedFile result = wrapper.wrap(file, ADDED_TRACKING);
+
+    assertThat(result.tracking().status()).isEqualTo(EntryStatus.ADDED);
+    assertThat(result.tracking().snapshotId()).isEqualTo(SNAPSHOT_ID);
+    assertThat(result.tracking().dataSequenceNumber()).isNull();
+    assertThat(result.tracking().fileSequenceNumber()).isNull();
+    assertThat(result.tracking().firstRowId()).isNull();
+    assertWriteDataFields(result, file, formatVersion);
   }
 
-  private static DeletionVector deletionVector() {
-    return DeletionVectorStruct.builder()
-        .location(DV_LOCATION)
-        .offset(128L)
-        .sizeInBytes(256L)
-        .cardinality(10L)
-        .build();
+  @Test
+  void testDataFileWrapperAddedWithNullSnapshotId() {
+    // Staged-write ADDED entry (FastAppend writes the manifest before the commit snapshot is
+    // assigned). Snapshot ID is inherited at read time from the enclosing root manifest's
+    // added_snapshot_id.
+    DataFile file = DATA_FILE;
+    Tracking tracking =
+        new TrackingStruct(EntryStatus.ADDED, null, null, null, null, null, null, null);
+    TrackedFileAdapters.DataTrackedFile wrapper =
+        TrackedFileAdapters.forDataFile(
+            FORMAT_VERSION_V4, TABLE_SCHEMA, METRICS_CONFIG, PARTITION_TYPE);
+    TrackedFile result = wrapper.wrap(file, tracking);
+
+    assertThat(result.tracking().status()).isEqualTo(EntryStatus.ADDED);
+    assertThat(result.tracking().snapshotId()).isNull();
+    assertWriteDataFields(result, file, FORMAT_VERSION_V4);
   }
 
-  private static ContentStats createContentStats() {
-    Types.StructType statsStruct =
-        Types.StructType.of(
-            Types.NestedField.optional(
-                10000,
-                "1",
-                Types.StructType.of(
-                    Types.NestedField.optional(10001, "value_count", Types.LongType.get()),
-                    Types.NestedField.optional(10002, "null_value_count", Types.LongType.get()),
-                    Types.NestedField.optional(10003, "nan_value_count", Types.LongType.get()),
-                    Types.NestedField.optional(10006, "lower_bound", Types.IntegerType.get()),
-                    Types.NestedField.optional(10007, "upper_bound", Types.IntegerType.get()))),
-            Types.NestedField.optional(
-                20000,
-                "2",
-                Types.StructType.of(
-                    Types.NestedField.optional(20001, "value_count", Types.LongType.get()),
-                    Types.NestedField.optional(20002, "null_value_count", Types.LongType.get()),
-                    Types.NestedField.optional(20003, "nan_value_count", Types.LongType.get()),
-                    Types.NestedField.optional(20006, "lower_bound", Types.FloatType.get()),
-                    Types.NestedField.optional(20007, "upper_bound", Types.FloatType.get()))));
+  @Test
+  void testDataFileWrapperExisting() {
+    DataFile file = DATA_FILE;
+    TrackedFileAdapters.DataTrackedFile wrapper =
+        TrackedFileAdapters.forDataFile(
+            FORMAT_VERSION_V4, TABLE_SCHEMA, METRICS_CONFIG, PARTITION_TYPE);
+    TrackedFile result = wrapper.wrap(file, EXISTING_TRACKING);
 
-    List<FieldStats<?>> fieldStatsList =
-        ImmutableList.of(
-            BaseFieldStats.<Integer>builder()
-                .fieldId(1)
-                .type(Types.IntegerType.get())
-                .valueCount(100L)
-                .nullValueCount(5L)
-                .lowerBound(1)
-                .upperBound(1000)
-                .build(),
-            BaseFieldStats.<Float>builder()
-                .fieldId(2)
-                .type(Types.FloatType.get())
-                .valueCount(200L)
-                .nullValueCount(10L)
-                .nanValueCount(3L)
-                .lowerBound(1.0f)
-                .upperBound(100.0f)
-                .build());
-
-    return BaseContentStats.builder()
-        .withStatsStruct(statsStruct)
-        .withFieldStats(fieldStatsList)
-        .build();
+    assertThat(result.tracking().status()).isEqualTo(EntryStatus.EXISTING);
+    assertThat(result.tracking().snapshotId()).isEqualTo(SNAPSHOT_ID);
+    assertThat(result.tracking().dataSequenceNumber()).isEqualTo(DATA_SEQ);
+    assertThat(result.tracking().fileSequenceNumber()).isEqualTo(FILE_SEQ);
+    assertWriteDataFields(result, file, FORMAT_VERSION_V4);
   }
 
-  private static int ordinalOf(Types.StructType schema, String fieldName) {
-    List<Types.NestedField> fields = schema.fields();
-    for (int i = 0; i < fields.size(); i += 1) {
-      if (fields.get(i).name().equals(fieldName)) {
-        return i;
-      }
-    }
+  @Test
+  void testDataFileWrapperDeleted() {
+    DataFile file = DATA_FILE;
+    TrackedFileAdapters.DataTrackedFile wrapper =
+        TrackedFileAdapters.forDataFile(
+            FORMAT_VERSION_V4, TABLE_SCHEMA, METRICS_CONFIG, PARTITION_TYPE);
+    TrackedFile result = wrapper.wrap(file, DELETED_TRACKING);
 
-    throw new IllegalArgumentException("No such field: " + fieldName);
+    assertThat(result.tracking().status()).isEqualTo(EntryStatus.DELETED);
+    assertThat(result.tracking().snapshotId()).isEqualTo(SNAPSHOT_ID);
+    assertThat(result.tracking().dataSequenceNumber()).isEqualTo(DATA_SEQ);
+    assertThat(result.tracking().fileSequenceNumber()).isEqualTo(FILE_SEQ);
+  }
+
+  @Test
+  void testDataFileWrapperReuse() {
+    // Same wrapper instance, two different files. The second wrap() call must not leak state from
+    // the first: this matches how V4Writer will hold one wrapper and rebind per row.
+    DataFile file1 = DATA_FILE;
+    DataFile file2 =
+        new GenericDataFile(
+            UNPARTITIONED_SPEC.specId(),
+            "s3://bucket/data/file2.parquet",
+            FileFormat.PARQUET,
+            EMPTY_PARTITION_DATA,
+            2048L,
+            new Metrics(200L, null, null, null, null),
+            null,
+            ImmutableList.of(0L),
+            null,
+            null);
+
+    TrackedFileAdapters.DataTrackedFile wrapper =
+        TrackedFileAdapters.forDataFile(
+            FORMAT_VERSION_V4, TABLE_SCHEMA, METRICS_CONFIG, PARTITION_TYPE);
+
+    wrapper.wrap(file1, ADDED_TRACKING);
+    assertThat(wrapper.location()).isEqualTo(DATA_PATH);
+    assertThat(wrapper.recordCount()).isEqualTo(100L);
+
+    wrapper.wrap(file2, EXISTING_TRACKING);
+    assertThat(wrapper.location()).isEqualTo("s3://bucket/data/file2.parquet");
+    assertThat(wrapper.recordCount()).isEqualTo(200L);
+    assertThat(wrapper.tracking().status()).isEqualTo(EntryStatus.EXISTING);
+    assertThat(wrapper.fileSizeInBytes()).isEqualTo(2048L);
+
+    // No state leaks from file1 after rebinding to file2.
+    assertThat(wrapper.location()).isNotEqualTo(file1.location());
+    assertThat(wrapper.recordCount()).isNotEqualTo(file1.recordCount());
+    assertThat(wrapper.fileSizeInBytes()).isNotEqualTo(file1.fileSizeInBytes());
+    assertThat(wrapper.tracking().status()).isNotEqualTo(EntryStatus.ADDED);
+  }
+
+  @Test
+  void testDataFileWrapperRejectsNullFile() {
+    TrackedFileAdapters.DataTrackedFile wrapper =
+        TrackedFileAdapters.forDataFile(
+            FORMAT_VERSION_V4, TABLE_SCHEMA, METRICS_CONFIG, PARTITION_TYPE);
+    assertThatThrownBy(() -> wrapper.wrap(null, ADDED_TRACKING))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("Invalid file: null");
+  }
+
+  @Test
+  void testDataFileWrapperRejectsNullTracking() {
+    DataFile file = DATA_FILE;
+    TrackedFileAdapters.DataTrackedFile wrapper =
+        TrackedFileAdapters.forDataFile(
+            FORMAT_VERSION_V4, TABLE_SCHEMA, METRICS_CONFIG, PARTITION_TYPE);
+    assertThatThrownBy(() -> wrapper.wrap(file, null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("Invalid tracking: null");
+  }
+
+  @Test
+  void testEqualityDeleteFileWrapper() {
+    DeleteFile file = EQUALITY_DELETE_FILE;
+    TrackedFileAdapters.EqualityDeleteTrackedFile wrapper =
+        TrackedFileAdapters.forEqualityDeleteFile(
+            FORMAT_VERSION_V4, TABLE_SCHEMA, METRICS_CONFIG, PARTITION_TYPE);
+    TrackedFile result = wrapper.wrap(file, ADDED_TRACKING);
+
+    assertThat(result.contentType()).isEqualTo(FileContent.EQUALITY_DELETES);
+    assertThat(result.tracking().status()).isEqualTo(EntryStatus.ADDED);
+    assertThat(result.tracking().firstRowId()).isNull();
+    assertThat(result.equalityIds()).containsExactly(1);
+    assertThat(result.sortOrderId()).isNull();
+    assertThat(result.location()).isEqualTo(DELETE_PATH);
+  }
+
+  @Test
+  void testEqualityDeleteFileWrapperRejectsV3Dv() {
+    // A deletion vector (in Puffin) is not an equality delete: in v4 it is carried
+    // inline on its data file's TrackedFile row rather than as a delete manifest entry.
+    DeleteFile dv =
+        new GenericDeleteFile(
+            UNPARTITIONED_SPEC.specId(),
+            FileContent.POSITION_DELETES,
+            DELETE_PATH,
+            FileFormat.PUFFIN,
+            EMPTY_PARTITION_DATA,
+            512L,
+            new Metrics(10L, null, null, null, null),
+            null,
+            null,
+            null,
+            null,
+            DATA_PATH,
+            0L,
+            512L);
+    TrackedFileAdapters.EqualityDeleteTrackedFile wrapper =
+        TrackedFileAdapters.forEqualityDeleteFile(
+            FORMAT_VERSION_V4, TABLE_SCHEMA, METRICS_CONFIG, PARTITION_TYPE);
+    assertThatThrownBy(() -> wrapper.wrap(dv, ADDED_TRACKING))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("Invalid content for delete file: POSITION_DELETES");
+  }
+
+  @Test
+  void testEqualityDeleteFileWrapperRejectsV2PositionDeletes() {
+    // A v2 position delete file (in Parquet) is not an equality delete and has no v4 leaf
+    // representation, so the equality-delete wrapper rejects it.
+    DeleteFile positionDeletes =
+        new GenericDeleteFile(
+            UNPARTITIONED_SPEC.specId(),
+            FileContent.POSITION_DELETES,
+            DELETE_PATH,
+            FileFormat.PARQUET,
+            EMPTY_PARTITION_DATA,
+            512L,
+            new Metrics(10L, null, null, null, null),
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null);
+    TrackedFileAdapters.EqualityDeleteTrackedFile wrapper =
+        TrackedFileAdapters.forEqualityDeleteFile(
+            FORMAT_VERSION_V4, TABLE_SCHEMA, METRICS_CONFIG, PARTITION_TYPE);
+    assertThatThrownBy(() -> wrapper.wrap(positionDeletes, ADDED_TRACKING))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("Invalid content for delete file: POSITION_DELETES");
+  }
+
+  @Test
+  void testDataFileWrapperContentStats() {
+    DataFile file = DATA_FILE_WITH_METRICS;
+    TrackedFileAdapters.DataTrackedFile wrapper =
+        TrackedFileAdapters.forDataFile(
+            FORMAT_VERSION_V4, TABLE_SCHEMA, METRICS_CONFIG, PARTITION_TYPE);
+    TrackedFile result = wrapper.wrap(file, ADDED_TRACKING);
+
+    ContentStats stats = result.contentStats();
+    assertThat(stats).isNotNull();
+    assertThat(stats.fieldStats()).extracting(FieldStats::fieldId).containsExactlyInAnyOrder(1, 2);
+
+    FieldStats<?> idStats = stats.statsFor(1);
+    assertThat(idStats.valueCount()).isEqualTo(100L);
+    assertThat(idStats.lowerBound()).isEqualTo(1);
+    assertThat(idStats.upperBound()).isEqualTo(1000);
+  }
+
+  @Test
+  void testDataFileWrapperPartitionProjection() {
+    // Multi-spec carry-over: the writer spec has one field but the union partition type carries an
+    // additional field from another live spec. The wrapper must place the writer's value at the
+    // field-ID position and leave the extra union field null.
+    PartitionSpec writerSpec = PartitionSpec.builderFor(TABLE_SCHEMA).bucket("id", 16).build();
+    Types.NestedField writerField = writerSpec.partitionType().fields().get(0);
+    Types.NestedField extraField =
+        Types.NestedField.optional(2000, "extra", Types.IntegerType.get());
+    Types.StructType unionType = Types.StructType.of(writerField, extraField);
+
+    PartitionData partition = new PartitionData(writerSpec.partitionType());
+    partition.set(0, 7);
+    DataFile file =
+        new GenericDataFile(
+            writerSpec.specId(),
+            DATA_PATH,
+            FileFormat.PARQUET,
+            partition,
+            1024L,
+            new Metrics(100L, null, null, null, null),
+            null,
+            ImmutableList.of(0L),
+            null,
+            null);
+
+    TrackedFileAdapters.DataTrackedFile wrapper =
+        TrackedFileAdapters.forDataFile(FORMAT_VERSION_V4, TABLE_SCHEMA, METRICS_CONFIG, unionType);
+    TrackedFile result = wrapper.wrap(file, ADDED_TRACKING);
+
+    StructLike projected = result.partition();
+    int writerPos = unionType.fields().indexOf(writerField);
+    int extraPos = unionType.fields().indexOf(extraField);
+    assertThat(projected.get(writerPos, Integer.class)).isEqualTo(7);
+    assertThat(projected.get(extraPos, Integer.class)).isNull();
+  }
+
+  @Test
+  void testDataFileDoubleWrapRoundTrip() {
+    // DataFile -> TrackedFile (write) -> DataFile (read) round-trip preserves fields observable on
+    // the DataFile API.
+    DataFile source = DATA_FILE_WITH_METRICS;
+    Map<Integer, PartitionSpec> specs =
+        ImmutableMap.of(UNPARTITIONED_SPEC.specId(), UNPARTITIONED_SPEC);
+
+    TrackedFile tracked =
+        TrackedFileAdapters.forDataFile(
+                FORMAT_VERSION_V4, TABLE_SCHEMA, METRICS_CONFIG, PARTITION_TYPE)
+            .wrap(source, EXISTING_TRACKING);
+
+    DataFile roundTripped = TrackedFileAdapters.asDataFile(tracked, specs);
+
+    assertThat(roundTripped.location()).isEqualTo(source.location());
+    assertThat(roundTripped.format()).isEqualTo(source.format());
+    assertThat(roundTripped.recordCount()).isEqualTo(source.recordCount());
+    assertThat(roundTripped.fileSizeInBytes()).isEqualTo(source.fileSizeInBytes());
+    assertThat(roundTripped.specId()).isEqualTo(source.specId());
+    assertThat(roundTripped.dataSequenceNumber()).isEqualTo(DATA_SEQ);
+    assertThat(roundTripped.fileSequenceNumber()).isEqualTo(FILE_SEQ);
+    assertThat(roundTripped.valueCounts()).containsAllEntriesOf(source.valueCounts());
+    assertThat(roundTripped.nullValueCounts()).containsAllEntriesOf(source.nullValueCounts());
+    assertThat(roundTripped.lowerBounds()).containsAllEntriesOf(source.lowerBounds());
+    assertThat(roundTripped.upperBounds()).containsAllEntriesOf(source.upperBounds());
+  }
+
+  @Test
+  void testManifestReferenceWrapperForV4Manifest() {
+    GenericManifestFile manifest = v4WriteManifestFile(ManifestContent.DATA, 4, 6L);
+    TrackedFileAdapters.ManifestTrackedFile wrapper = TrackedFileAdapters.forManifestReference();
+    TrackedFile result = wrapper.wrap(manifest, EntryStatus.ADDED, 1000L);
+
+    assertThat(result.contentType()).isEqualTo(FileContent.DATA_MANIFEST);
+    assertThat(result.formatVersion()).isEqualTo(4);
+    assertThat(result.location()).isEqualTo(MANIFEST_PATH);
+    assertThat(result.tracking().firstRowId()).isEqualTo(1000L);
+    assertThat(result.recordCount()).isEqualTo(6L);
+    assertThat(result.manifestInfo()).isNotNull();
+    assertThat(result.manifestInfo().addedFilesCount()).isEqualTo(2);
+    assertThat(result.manifestInfo().existingFilesCount()).isEqualTo(3);
+    assertThat(result.manifestInfo().deletedFilesCount()).isEqualTo(1);
+    assertThat(result.manifestInfo().addedRowsCount()).isEqualTo(200L);
+    assertThat(result.manifestInfo().replacedFilesCount()).isEqualTo(0);
+    assertThat(result.manifestInfo().replacedRowsCount()).isEqualTo(0L);
+  }
+
+  @Test
+  void testManifestReferenceWrapperForPreV4() {
+    // Pre-v4 manifest has formatVersion=LEGACY_FORMAT_VERSION by default; the wrapper sums
+    // per-status counts.
+    ManifestFile manifest = writeManifestFile(ManifestContent.DELETES);
+    TrackedFileAdapters.ManifestTrackedFile wrapper = TrackedFileAdapters.forManifestReference();
+    TrackedFile result = wrapper.wrap(manifest, EntryStatus.EXISTING, null);
+
+    assertThat(result.contentType()).isEqualTo(FileContent.DELETE_MANIFEST);
+    assertThat(result.formatVersion()).isEqualTo(ManifestFile.LEGACY_FORMAT_VERSION);
+    assertThat(result.recordCount()).isEqualTo(6L);
+    assertThat(result.tracking().status()).isEqualTo(EntryStatus.EXISTING);
+    assertThat(result.tracking().firstRowId()).isNull();
+  }
+
+  @Test
+  void testManifestReferenceWrapperRejectsFirstRowIdOnDeleteManifest() {
+    ManifestFile manifest = writeManifestFile(ManifestContent.DELETES);
+    TrackedFileAdapters.ManifestTrackedFile wrapper = TrackedFileAdapters.forManifestReference();
+    assertThatThrownBy(() -> wrapper.wrap(manifest, EntryStatus.ADDED, 100L))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("firstRowId is only valid for DATA manifests");
+  }
+
+  @Test
+  void testManifestReferenceWrapperRejectsUnassignedSequenceNumber() {
+    ManifestFile manifest =
+        writeManifestFile(ManifestContent.DATA, ManifestWriter.UNASSIGNED_SEQ, 4L);
+    TrackedFileAdapters.ManifestTrackedFile wrapper = TrackedFileAdapters.forManifestReference();
+    assertThatThrownBy(() -> wrapper.wrap(manifest, EntryStatus.ADDED, null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("sequence_number is unassigned");
+  }
+
+  @Test
+  void testManifestReferenceWrapperRejectsV4WithoutRecordCount() {
+    GenericManifestFile manifest =
+        v4WriteManifestFile(ManifestContent.DATA, 4, null /* recordCount */);
+    TrackedFileAdapters.ManifestTrackedFile wrapper = TrackedFileAdapters.forManifestReference();
+    assertThatThrownBy(() -> wrapper.wrap(manifest, EntryStatus.ADDED, null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("record_count must be set");
+  }
+
+  private static void assertWriteDataFields(TrackedFile result, DataFile file, int formatVersion) {
+    assertThat(result.contentType()).isEqualTo(FileContent.DATA);
+    assertThat(result.formatVersion()).isEqualTo(formatVersion);
+    assertThat(result.location()).isEqualTo(file.location());
+    assertThat(result.fileFormat()).isEqualTo(file.format());
+    assertThat(result.recordCount()).isEqualTo(file.recordCount());
+    assertThat(result.fileSizeInBytes()).isEqualTo(file.fileSizeInBytes());
+    assertThat(result.specId()).isEqualTo(file.specId());
+    assertThat(result.splitOffsets()).isEqualTo(file.splitOffsets());
+  }
+
+  private static ManifestFile writeManifestFile(ManifestContent content) {
+    return writeManifestFile(content, 5L, 4L);
+  }
+
+  private static ManifestFile writeManifestFile(
+      ManifestContent content, long sequenceNumber, long minSequenceNumber) {
+    List<ManifestFile.PartitionFieldSummary> partitions = ImmutableList.of();
+    return new GenericManifestFile(
+        MANIFEST_PATH,
+        2048L,
+        UNPARTITIONED_SPEC.specId(),
+        content,
+        sequenceNumber,
+        minSequenceNumber,
+        SNAPSHOT_ID,
+        partitions,
+        null,
+        2,
+        200L,
+        3,
+        300L,
+        1,
+        100L,
+        null);
+  }
+
+  private static GenericManifestFile v4WriteManifestFile(
+      ManifestContent content, int formatVersion, Long recordCount) {
+    List<ManifestFile.PartitionFieldSummary> partitions = ImmutableList.of();
+    return new GenericManifestFile(
+        MANIFEST_PATH,
+        2048L,
+        UNPARTITIONED_SPEC.specId(),
+        content,
+        5L,
+        4L,
+        SNAPSHOT_ID,
+        partitions,
+        null,
+        2,
+        200L,
+        3,
+        300L,
+        1,
+        100L,
+        null,
+        recordCount,
+        formatVersion);
   }
 }

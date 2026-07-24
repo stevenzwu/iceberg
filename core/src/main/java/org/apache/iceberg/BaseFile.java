@@ -48,13 +48,6 @@ abstract class BaseFile<F> extends SupportsIndexProjection
         Serializable {
 
   static final Types.StructType EMPTY_STRUCT_TYPE = Types.StructType.of();
-  static final PartitionData EMPTY_PARTITION_DATA =
-      new PartitionData(EMPTY_STRUCT_TYPE) {
-        @Override
-        public PartitionData copy() {
-          return this; // this does not change
-        }
-      };
 
   private Types.StructType partitionType;
 
@@ -171,8 +164,8 @@ abstract class BaseFile<F> extends SupportsIndexProjection
 
     // this constructor is used by DataFiles.Builder, which passes null for unpartitioned data
     if (partition == null) {
-      this.partitionData = EMPTY_PARTITION_DATA;
-      this.partitionType = EMPTY_PARTITION_DATA.getPartitionType();
+      this.partitionData = PartitionData.EMPTY;
+      this.partitionType = PartitionData.EMPTY.getPartitionType();
     } else {
       this.partitionData = partition;
       this.partitionType = partition.getPartitionType();
@@ -280,6 +273,10 @@ abstract class BaseFile<F> extends SupportsIndexProjection
     this.manifestLocation = manifestLocation;
   }
 
+  void setFileOrdinal(long ordinal) {
+    this.fileOrdinal = ordinal;
+  }
+
   @Override
   public Long fileSequenceNumber() {
     return fileSequenceNumber;
@@ -331,7 +328,7 @@ abstract class BaseFile<F> extends SupportsIndexProjection
         return;
       case 4:
         // Preserve the constructor-initialized partitionData when the reader returns null
-        // (e.g., v4 Parquet manifests for unpartitioned tables omit the partition field).
+        // (e.g., v4+ Parquet manifests for unpartitioned tables omit the partition field).
         if (value != null) {
           this.partitionData = (PartitionData) value;
         }

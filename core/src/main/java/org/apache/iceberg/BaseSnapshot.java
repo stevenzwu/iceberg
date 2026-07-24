@@ -39,6 +39,8 @@ class BaseSnapshot implements Snapshot {
   private final long sequenceNumber;
   private final long timestampMillis;
   private final String manifestListLocation;
+  private final String rootManifestLocation;
+  private final int formatVersion;
   private final String operation;
   private final Map<String, String> summary;
   private final Integer schemaId;
@@ -68,6 +70,41 @@ class BaseSnapshot implements Snapshot {
       Long firstRowId,
       Long addedRows,
       String keyId) {
+    this(
+        2,
+        sequenceNumber,
+        snapshotId,
+        parentId,
+        timestampMillis,
+        operation,
+        summary,
+        schemaId,
+        manifestList,
+        null,
+        firstRowId,
+        addedRows,
+        keyId);
+  }
+
+  BaseSnapshot(
+      int formatVersion,
+      long sequenceNumber,
+      long snapshotId,
+      Long parentId,
+      long timestampMillis,
+      String operation,
+      Map<String, String> summary,
+      Integer schemaId,
+      String manifestList,
+      String rootManifest,
+      Long firstRowId,
+      Long addedRows,
+      String keyId) {
+    Preconditions.checkArgument(
+        (manifestList == null) != (rootManifest == null),
+        "Invalid snapshot: must have exactly one of manifest-list (%s) or root-manifest (%s)",
+        manifestList,
+        rootManifest);
     Preconditions.checkArgument(
         firstRowId == null || firstRowId >= 0,
         "Invalid first-row-id (cannot be negative): %s",
@@ -79,6 +116,7 @@ class BaseSnapshot implements Snapshot {
     Preconditions.checkArgument(
         firstRowId == null || addedRows != null,
         "Invalid added-rows (required when first-row-id is set): null");
+    this.formatVersion = formatVersion;
     this.sequenceNumber = sequenceNumber;
     this.snapshotId = snapshotId;
     this.parentId = parentId;
@@ -87,6 +125,7 @@ class BaseSnapshot implements Snapshot {
     this.summary = summary;
     this.schemaId = schemaId;
     this.manifestListLocation = manifestList;
+    this.rootManifestLocation = rootManifest;
     this.v1ManifestLocations = null;
     this.firstRowId = firstRowId;
     this.addedRows = firstRowId != null ? addedRows : null;
@@ -102,6 +141,7 @@ class BaseSnapshot implements Snapshot {
       Map<String, String> summary,
       Integer schemaId,
       String[] v1ManifestLocations) {
+    this.formatVersion = 1;
     this.sequenceNumber = sequenceNumber;
     this.snapshotId = snapshotId;
     this.parentId = parentId;
@@ -110,6 +150,7 @@ class BaseSnapshot implements Snapshot {
     this.summary = summary;
     this.schemaId = schemaId;
     this.manifestListLocation = null;
+    this.rootManifestLocation = null;
     this.v1ManifestLocations = v1ManifestLocations;
     this.firstRowId = null;
     this.addedRows = null;
@@ -182,10 +223,14 @@ class BaseSnapshot implements Snapshot {
 
     if (allManifests == null) {
       // if manifests isn't set, then the snapshotFile is set and should be read to get the list
-      this.allManifests =
-          ManifestLists.read(
-              ManifestLists.newInputFile(
-                  fileIO, new BaseManifestListFile(manifestListLocation, keyId)));
+      if (formatVersion >= 4) {
+        this.allManifests = RootManifests.read(fileIO.newInputFile(rootManifestLocation));
+      } else {
+        this.allManifests =
+            ManifestLists.read(
+                ManifestLists.newInputFile(
+                    fileIO, new BaseManifestListFile(manifestListLocation, keyId)));
+      }
     }
 
     if (dataManifests == null || deleteManifests == null) {
@@ -259,6 +304,11 @@ class BaseSnapshot implements Snapshot {
   @Override
   public String manifestListLocation() {
     return manifestListLocation;
+  }
+
+  @Override
+  public String rootManifestLocation() {
+    return rootManifestLocation;
   }
 
   private void cacheDeleteFileChanges(FileIO fileIO) {
@@ -340,7 +390,10 @@ class BaseSnapshot implements Snapshot {
           && Objects.equal(this.parentId, other.parentId())
           && this.sequenceNumber == other.sequenceNumber()
           && this.timestampMillis == other.timestampMillis()
-          && Objects.equal(this.schemaId, other.schemaId());
+          && Objects.equal(this.schemaId, other.schemaId())
+          && Objects.equal(this.firstRowId, other.firstRowId())
+          && Objects.equal(this.addedRows, other.addedRows())
+          && Objects.equal(this.keyId, other.keyId());
     }
 
     return false;
@@ -349,7 +402,14 @@ class BaseSnapshot implements Snapshot {
   @Override
   public int hashCode() {
     return Objects.hashCode(
-        this.snapshotId, this.parentId, this.sequenceNumber, this.timestampMillis, this.schemaId);
+        this.snapshotId,
+        this.parentId,
+        this.sequenceNumber,
+        this.timestampMillis,
+        this.schemaId,
+        this.firstRowId,
+        this.addedRows,
+        this.keyId);
   }
 
   @Override
@@ -361,6 +421,9 @@ class BaseSnapshot implements Snapshot {
         .add("summary", summary)
         .add("manifest-list", manifestListLocation)
         .add("schema-id", schemaId)
+        .add("first-row-id", firstRowId)
+        .add("added-rows", addedRows)
+        .add("key-id", keyId)
         .toString();
   }
 }
