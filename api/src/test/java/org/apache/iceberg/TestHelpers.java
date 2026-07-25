@@ -94,6 +94,8 @@ public class TestHelpers {
       IntStream.rangeClosed(3, DEFAULT_MAX_TEST_FORMAT_VERSION)
           .boxed()
           .collect(Collectors.toUnmodifiableList());
+  public static final List<Integer> V4_AND_ABOVE =
+      IntStream.rangeClosed(4, MAX_FORMAT_VERSION).boxed().collect(Collectors.toUnmodifiableList());
 
   /** Wait in a tight check loop until system clock is past {@code timestampMillis} */
   public static long waitUntilAfter(long timestampMillis) {
