@@ -141,7 +141,15 @@ class DeleteFileIndex {
   }
 
   DeleteFile[] forEntry(ManifestEntry<DataFile> entry) {
-    return forDataFile(entry.dataSequenceNumber(), entry.file());
+    Long entrySeq = entry.dataSequenceNumber();
+    if (entrySeq == null) {
+      entrySeq = entry.file().dataSequenceNumber();
+    }
+    Preconditions.checkState(
+        entrySeq != null,
+        "Missing data sequence number for entry (file: %s); cannot resolve applicable deletes",
+        entry.file().location());
+    return forDataFile(entrySeq, entry.file());
   }
 
   DeleteFile[] forDataFile(DataFile file) {
@@ -377,7 +385,6 @@ class DeleteFileIndex {
     private ExecutorService executorService = null;
     private ScanMetrics scanMetrics = ScanMetrics.noop();
     private boolean ignoreResiduals = false;
-    private Iterable<DeleteFile> extraDeleteFiles = null;
 
     Builder(FileIO io, Set<ManifestFile> deleteManifests) {
       this.io = io;
@@ -447,29 +454,8 @@ class DeleteFileIndex {
       return this;
     }
 
-    /**
-     * Adds an iterable of pre-resolved delete files (e.g., v4+ colocated DVs extracted from data
-     * manifests) to merge alongside the delete manifest source. Filters {@link
-     * #afterSequenceNumber} apply to these files as they do to delete-manifest entries.
-     */
-    Builder addDeleteFiles(Iterable<DeleteFile> newDeleteFiles) {
-      Preconditions.checkArgument(
-          deleteFiles == null,
-          "Cannot add extra delete files to an index already constructed from a delete-file iterable");
-      this.extraDeleteFiles =
-          extraDeleteFiles == null
-              ? newDeleteFiles
-              : Iterables.concat(extraDeleteFiles, newDeleteFiles);
-      return this;
-    }
-
     private Iterable<DeleteFile> filterDeleteFiles() {
       return Iterables.filter(deleteFiles, file -> file.dataSequenceNumber() > minSequenceNumber);
-    }
-
-    private Iterable<DeleteFile> filterExtraDeleteFiles() {
-      return Iterables.filter(
-          extraDeleteFiles, file -> file.dataSequenceNumber() > minSequenceNumber);
     }
 
     private Collection<DeleteFile> loadDeleteFiles() {
@@ -514,9 +500,6 @@ class DeleteFileIndex {
       Map<Integer, Types.NestedField> fieldsById = Schema.indexFields(schemas());
       Function<Integer, Types.NestedField> fieldLookup = fieldsById::get;
       Iterable<DeleteFile> files = deleteFiles != null ? filterDeleteFiles() : loadDeleteFiles();
-      if (extraDeleteFiles != null) {
-        files = Iterables.concat(files, filterExtraDeleteFiles());
-      }
 
       EqualityDeletes globalDeletes = new EqualityDeletes(fieldLookup);
       PartitionMap<EqualityDeletes> eqDeletesByPartition = PartitionMap.create(specsById);

@@ -185,12 +185,17 @@ public class ManifestFiles {
 
     InputFile file = newInputFile(io, manifest);
     InheritableMetadata inheritableMetadata = InheritableMetadataFactory.fromManifest(manifest);
-    V4ManifestReader reader =
-        V4ManifestReader.forData(file, manifest.partitionSpecId(), specsById, inheritableMetadata);
-    CloseableIterable<DeleteFile> dvs = reader.colocatedDVDeleteFiles();
-    // Ownership: the reader registers Parquet read state as closeables. Close it when the iterable
-    // is closed so we don't leak the underlying Parquet row iterator.
-    return CloseableIterable.combine(dvs, reader);
+    V4ManifestEntryProjector projector =
+        new V4ManifestEntryProjector(
+            file,
+            ManifestContent.DATA,
+            manifest.partitionSpecId(),
+            specsById,
+            inheritableMetadata);
+    CloseableIterable<DeleteFile> dvs = projector.colocatedDVDeleteFiles();
+    // Ownership: the projector registers Parquet read state as closeables. Close it when the
+    // iterable is closed so we don't leak the underlying Parquet row iterator.
+    return CloseableIterable.combine(dvs, projector);
   }
 
   /**
@@ -215,59 +220,16 @@ public class ManifestFiles {
 
     InputFile file = newInputFile(io, manifest);
     InheritableMetadata inheritableMetadata = InheritableMetadataFactory.fromManifest(manifest);
-    V4ManifestReader reader =
-        V4ManifestReader.forData(file, manifest.partitionSpecId(), specsById, inheritableMetadata);
-    CloseableIterable<Pair<ManifestEntry.Status, DeleteFile>> changes = reader.colocatedDVChanges();
-    return CloseableIterable.combine(changes, reader);
-  }
-
-  /**
-   * Returns true if the manifest uses the v4+ {@code content_entry} schema shape (Parquet with the
-   * tracking struct), false for legacy Avro {@code manifest_entry} manifests. Visible for {@link
-   * SnapshotChanges} and {@link BaseSnapshot} to dispatch between v4+-aware and legacy read paths.
-   */
-  static boolean isV4ContentEntryManifest(ManifestFile manifest, FileIO io) {
-    return manifest.formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE;
-  }
-
-  /**
-   * Returns data-file changes from a v4+ leaf data manifest as {@code (status, DataFile)} pairs.
-   * Surfaces v4+ tracking status directly so callers can distinguish data-file changes (ADDED,
-   * DELETED) from DV-state transitions (REPLACED, MODIFIED). REPLACED and MODIFIED rows are
-   * suppressed so callers only see actual data-file adds/removes. Returns an empty iterable for
-   * legacy (pre-v4) manifests.
-   */
-  static CloseableIterable<Pair<ManifestEntry.Status, DataFile>> readDataFileChanges(
-      ManifestFile manifest, FileIO io, Map<Integer, PartitionSpec> specsById) {
-    Preconditions.checkArgument(
-        manifest.content() == ManifestContent.DATA,
-        "Cannot read data file changes from a delete manifest: %s",
-        manifest);
-
-    if (manifest.formatVersion() < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
-      return CloseableIterable.empty();
-    }
-
-    InputFile file = newInputFile(io, manifest);
-    InheritableMetadata inheritableMetadata = InheritableMetadataFactory.fromManifest(manifest);
-    V4ManifestReader reader =
-        V4ManifestReader.forData(file, manifest.partitionSpecId(), specsById, inheritableMetadata);
-
-    // Surface only ADDED and DELETED rows from the v4+ tracking; REPLACED and MODIFIED are
-    // DV-state transitions and not data-file changes. Project the v4+ EntryStatus to the legacy
-    // ManifestEntry.Status (ADDED → ADDED, DELETED → DELETED) so callers can switch on a single
-    // enum.
-    CloseableIterable<Pair<ManifestEntry.Status, DataFile>> changes =
-        CloseableIterable.transform(
-            reader.dataFileChanges(),
-            pair -> {
-              ManifestEntry.Status status =
-                  pair.first() == EntryStatus.ADDED
-                      ? ManifestEntry.Status.ADDED
-                      : ManifestEntry.Status.DELETED;
-              return Pair.of(status, pair.second());
-            });
-    return CloseableIterable.combine(changes, reader);
+    V4ManifestEntryProjector projector =
+        new V4ManifestEntryProjector(
+            file,
+            ManifestContent.DATA,
+            manifest.partitionSpecId(),
+            specsById,
+            inheritableMetadata);
+    CloseableIterable<Pair<ManifestEntry.Status, DeleteFile>> changes =
+        projector.colocatedDVChanges();
+    return CloseableIterable.combine(changes, projector);
   }
 
   static ManifestReader<DataFile> read(
@@ -283,16 +245,24 @@ public class ManifestFiles {
     InheritableMetadata inheritableMetadata = InheritableMetadataFactory.fromManifest(manifest);
 
     if (manifest instanceof RootDirectRowsManifestFile) {
-      // Virtual manifest over a promoted root's direct DATA rows. Open the root as a v4 reader and
-      // filter co-resident DATA_MANIFEST / DELETE_MANIFEST rows out before yielding entries.
-      V4ManifestReader v4Reader =
-          V4ManifestReader.forData(
-              file, manifest.partitionSpecId(), specsById, inheritableMetadata);
+      // Virtual manifest over a promoted root's direct DATA rows. Feed the projector the direct
+      // rows already decoded by RootManifestReader so we don't re-open the root parquet file for
+      // the scan pass. Setting directRowsOnly=true keeps the entry stream filtered to DATA content
+      // (harmless for cached rows since RootManifestReader only cached DATA rows).
+      RootDirectRowsManifestFile virtualManifest = (RootDirectRowsManifestFile) manifest;
+      V4ManifestEntryProjector projector =
+          new V4ManifestEntryProjector(
+              file,
+              ManifestContent.DATA,
+              manifest.partitionSpecId(),
+              specsById,
+              inheritableMetadata,
+              virtualManifest.cachedDirectRows());
       return new V4ManifestReaderAdapter<>(
           file,
           manifest.partitionSpecId(),
           specsById,
-          v4Reader,
+          projector,
           ManifestContent.DATA,
           manifest.firstRowId(),
           isCommitted,
@@ -300,14 +270,18 @@ public class ManifestFiles {
     }
 
     if (manifest.formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
-      V4ManifestReader v4Reader =
-          V4ManifestReader.forData(
-              file, manifest.partitionSpecId(), specsById, inheritableMetadata);
+      V4ManifestEntryProjector projector =
+          new V4ManifestEntryProjector(
+              file,
+              ManifestContent.DATA,
+              manifest.partitionSpecId(),
+              specsById,
+              inheritableMetadata);
       return new V4ManifestReaderAdapter<>(
           file,
           manifest.partitionSpecId(),
           specsById,
-          v4Reader,
+          projector,
           ManifestContent.DATA,
           manifest.firstRowId(),
           isCommitted);
@@ -524,11 +498,19 @@ public class ManifestFiles {
     InheritableMetadata inheritableMetadata = InheritableMetadataFactory.fromManifest(manifest);
 
     if (manifest.formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
-      V4ManifestReader v4Reader =
-          V4ManifestReader.forDelete(
-              file, manifest.partitionSpecId(), specsById, inheritableMetadata);
+      V4ManifestEntryProjector projector =
+          new V4ManifestEntryProjector(
+              file,
+              ManifestContent.DELETES,
+              manifest.partitionSpecId(),
+              specsById,
+              inheritableMetadata);
       return new V4ManifestReaderAdapter<>(
-          file, manifest.partitionSpecId(), specsById, v4Reader, ManifestContent.DELETES);
+          file,
+          manifest.partitionSpecId(),
+          specsById,
+          projector,
+          ManifestContent.DELETES);
     }
 
     return new ManifestReader<>(

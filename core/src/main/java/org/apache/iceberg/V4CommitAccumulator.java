@@ -44,11 +44,11 @@ import org.apache.iceberg.util.Pair;
  * accumulate in memory until the projected size crosses the target, then spill as leaves.
  * Retirement is typically small, so this preserves the "no writer opened" small-write optimization
  * for those pools — their sub-target tails flow into the promoted root as direct rows, their
- * spilled leaves as leaf-manifest-entry refs. Equality-delete pools are Phase 6 work; {@link #add}
+ * spilled leaves as leaf-manifest-entries. Equality-delete pools are Phase 6 work; {@link #add}
  * rejects them today.
  *
- * <p>Callers hand external leaf references (imported manifests, DV-carrying manifests,
- * parent-snapshot carry-overs) via {@link #addExternalLeafReference}; they land in the promoted
+ * <p>Callers hand external leaf manifests (imported manifests, DV-carrying manifests,
+ * parent-snapshot carry-overs) via {@link #addExternalLeafManifestEntry}; they land in the promoted
  * root alongside the accumulator's own rolled/spilled leaves.
  */
 class V4CommitAccumulator {
@@ -57,7 +57,8 @@ class V4CommitAccumulator {
   private final BufferedLeafManifestWriter dataDeletedRetirement;
   private final BufferedLeafManifestWriter dataReplacedRetirement;
 
-  private final List<Pair<ManifestFile, EntryStatus>> externalLeafRefs = Lists.newArrayList();
+  private final List<Pair<ManifestFile, EntryStatus>> externalLeafManifestEntries =
+      Lists.newArrayList();
 
   private boolean closed = false;
   private SnapshotFile promotedRoot;
@@ -88,14 +89,10 @@ class V4CommitAccumulator {
   /**
    * Routes a row into the pool matching its {@link FileContent} and tracking status.
    *
-   * <p>The {@code isLive} parameter is retained for API symmetry with the reader-side scan path but
-   * is not consulted for pool routing; the row's own tracking status determines its pool via {@link
-   * V4RootManifestAssembler#classify(FileContent, EntryStatus)}.
-   *
    * @throws UnsupportedOperationException if the row is an equality delete (delete pools are Phase
    *     6 work)
    */
-  void add(TrackedFile row, boolean isLive) {
+  void add(TrackedFile row) {
     Preconditions.checkState(!closed, "Cannot add to a closed V4CommitAccumulator");
     Preconditions.checkNotNull(row, "TrackedFile row cannot be null");
     EntryStatus status = row.tracking().status();
@@ -121,39 +118,41 @@ class V4CommitAccumulator {
   }
 
   /**
-   * Records an external leaf manifest as a reference to be written into the promoted root at close
-   * time, with the given {@link EntryStatus}. Used for imported manifests, DV-carrying manifests
-   * still on the legacy write path, and parent-snapshot carry-overs — leaves that were not produced
-   * by this accumulator but must appear as leaf-manifest-entries in the root.
+   * Records an external leaf manifest to be written into the promoted root at close time as a
+   * leaf-manifest-entry with the given {@link EntryStatus}. Used for imported manifests,
+   * DV-carrying manifests still on the legacy write path, and parent-snapshot carry-overs — leaves
+   * that were not produced by this accumulator but must appear as leaf-manifest-entries in root.
    */
-  void addExternalLeafReference(ManifestFile leafManifest, EntryStatus status) {
+  void addExternalLeafManifestEntry(ManifestFile leafManifest, EntryStatus status) {
     Preconditions.checkState(!closed, "Cannot add to a closed V4CommitAccumulator");
     Preconditions.checkArgument(leafManifest != null, "Invalid external leaf: null");
     Preconditions.checkArgument(status != null, "Invalid status: null");
-    externalLeafRefs.add(Pair.of(leafManifest, status));
+    externalLeafManifestEntries.add(Pair.of(leafManifest, status));
   }
 
   /**
    * Closes the retirement pools and promotes the live pool's still-open writer to the snapshot's
    * root manifest, then drives the remaining content into the returned open {@link
    * RootManifestWriter}: each retirement pool's sub-target tail as direct rows, and every
-   * rolled/spilled leaf plus the caller's external references as leaf-manifest-entries. Returns the
-   * promoted root's {@link SnapshotFile}; its {@code location} is the snapshot's {@code
+   * rolled/spilled leaf plus the caller's external leaf manifests as leaf-manifest-entries. Returns
+   * the promoted root's {@link SnapshotFile}; its {@code location} is the snapshot's {@code
    * snapshotFileLocation}.
    *
    * <p>Idempotent — a second call returns the same {@code promotedRoot}.
    *
-   * @param snapshotId the committing snapshot id, used to resolve UNASSIGNED_SEQ on refs
+   * @param snapshotId the committing snapshot id, used to resolve UNASSIGNED_SEQ on
+   *     leaf-manifest-entries
    * @param sequenceNumber the committing sequence number
-   * @param nextRowId the initial first-row-id counter for freshly-written DATA manifest refs
+   * @param nextRowId the initial first-row-id counter for freshly-written DATA
+   *     leaf-manifest-entries
    */
   SnapshotFile close(long snapshotId, long sequenceNumber, Long nextRowId) {
     if (closed) {
       return promotedRoot;
     }
 
-    // Retirement pools finalize first: take each sub-target tail (direct rows) so the promoted root
-    // can inline them; their spilled leaves are referenced below.
+    // Retirement pools finalize first: take each sub-target tail (direct rows) so the promoted
+    // root can inline them; their spilled leaves are added as leaf-manifest-entries below.
     List<TrackedFile> deletedTail = dataDeletedRetirement.closeAndTakeTail();
     List<TrackedFile> replacedTail = dataReplacedRetirement.closeAndTakeTail();
 
@@ -161,37 +160,46 @@ class V4CommitAccumulator {
     // returned open root writer and owns its close().
     RootManifestWriter root = dataLive.promoteCurrentToRoot(snapshotId, sequenceNumber, nextRowId);
 
-    // Direct rows: retirement pool tails.
-    deletedTail.forEach(root::add);
-    replacedTail.forEach(root::add);
-
-    // Leaf-manifest-entries: dataLive's rolled leaves (ADDED), retirement pool leaves (DELETED /
-    // REPLACED), then caller-supplied external refs.
-    for (ManifestFile leaf : dataLive.completedLeaves()) {
-      root.addManifestEntry(leaf, EntryStatus.ADDED);
-    }
-
-    for (ManifestFile leaf : dataDeletedRetirement.toManifestFiles()) {
-      root.addManifestEntry(leaf, EntryStatus.DELETED);
-    }
-
-    for (ManifestFile leaf : dataReplacedRetirement.toManifestFiles()) {
-      root.addManifestEntry(leaf, EntryStatus.REPLACED);
-    }
-
-    for (Pair<ManifestFile, EntryStatus> ref : externalLeafRefs) {
-      root.addManifestEntry(ref.first(), ref.second());
-    }
-
+    boolean threw = true;
     try {
+      // Direct rows: retirement pool tails.
+      deletedTail.forEach(root::add);
+      replacedTail.forEach(root::add);
+
+      // Leaf-manifest-entries: dataLive's rolled leaves (ADDED), retirement pool leaves (DELETED /
+      // REPLACED), then caller-supplied external leaves.
+      for (ManifestFile leaf : dataLive.completedLeaves()) {
+        root.addManifestEntry(leaf, EntryStatus.ADDED);
+      }
+
+      for (ManifestFile leaf : dataDeletedRetirement.toManifestFiles()) {
+        root.addManifestEntry(leaf, EntryStatus.DELETED);
+      }
+
+      for (ManifestFile leaf : dataReplacedRetirement.toManifestFiles()) {
+        root.addManifestEntry(leaf, EntryStatus.REPLACED);
+      }
+
+      for (Pair<ManifestFile, EntryStatus> external : externalLeafManifestEntries) {
+        root.addManifestEntry(external.first(), external.second());
+      }
+
       root.close();
+      this.promotedRoot = root.toSnapshotFile();
+      this.closed = true;
+      threw = false;
+      return promotedRoot;
     } catch (IOException e) {
       throw new UncheckedIOException("Failed to close promoted root manifest writer", e);
+    } finally {
+      if (threw) {
+        try {
+          root.close();
+        } catch (Exception suppressed) {
+          // best-effort cleanup — swallow to avoid masking the original failure
+        }
+      }
     }
-
-    this.promotedRoot = root.toSnapshotFile();
-    this.closed = true;
-    return promotedRoot;
   }
 
   /** Returns the promoted root {@link SnapshotFile}. Requires {@link #close} to have run. */

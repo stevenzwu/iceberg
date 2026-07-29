@@ -19,6 +19,7 @@
 package org.apache.iceberg;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.Map;
 import org.apache.iceberg.io.CloseableIterable;
@@ -33,11 +34,11 @@ import org.slf4j.LoggerFactory;
  * Reads v4+ root manifest files, yielding one {@link ManifestFile} per {@code DATA_MANIFEST} or
  * {@code DELETE_MANIFEST} content_entry row.
  *
- * <p>Direct DATA content rows (the small-write inline optimization) are aggregated into a single
- * synthetic {@link RootDirectRowsManifestFile} entry appended after the leaf references so
- * consumers of {@link Snapshot#dataManifests} — notably scan planning via {@link ManifestGroup} —
- * see the inline data files. Direct {@code EQUALITY_DELETES} rows are skipped at DEBUG level;
- * delete-side surfacing is deferred to Phase 6.
+ * <p>Direct DATA content rows in root (the small-write inline optimization) are aggregated into a
+ * single synthetic {@link RootDirectRowsManifestFile} entry appended after the
+ * leaf-manifest-entries so consumers of {@link Snapshot#dataManifests} — notably scan planning via
+ * {@link ManifestGroup} — see the inline data files. Direct {@code EQUALITY_DELETES} rows in root
+ * are skipped at DEBUG level; delete-side surfacing is deferred to Phase 6.
  *
  * <p>Leaf-manifest-entry rows leave the partition column null on write. For the direct-row
  * aggregation the partition tuple is not decoded here — only the aggregate row/file counts and
@@ -55,12 +56,16 @@ class RootManifestReader {
    * Reads a v4+ root manifest and returns the list of {@link ManifestFile} objects. When the root
    * carries direct DATA rows (small-write optimization), a synthetic {@link
    * RootDirectRowsManifestFile} covering those rows is appended so consumers of {@link
-   * Snapshot#dataManifests} pick them up alongside real leaf references.
+   * Snapshot#dataManifests} pick them up alongside real leaf manifests.
    *
    * @param rootManifest the root manifest input file
+   * @param snapshotSequenceNumber the sequence number of the snapshot that wrote this root, used as
+   *     the virtual manifest's sequence number so {@link InheritableMetadata} correctly propagates
+   *     it to direct-row entries that lack a persisted data sequence number (e.g., ADDED rows whose
+   *     sequence number is assigned at commit time)
    * @return list of manifest files (data and delete), in the order they appear in the root manifest
    */
-  static List<ManifestFile> read(InputFile rootManifest) {
+  static List<ManifestFile> read(InputFile rootManifest, long snapshotSequenceNumber) {
     Preconditions.checkArgument(rootManifest != null, "Invalid root manifest input file: null");
     // Spec-agnostic read: this reader has no specsById, so it cannot build the real union partition
     // type. It never decodes partition tuples (only leaf refs + direct-row counts), so it projects
@@ -73,7 +78,9 @@ class RootManifestReader {
     Schema contentEntrySchema =
         TrackedFile.schema(readPartitionType, TrackedFileWriter.ROOT_CONTENT_STATS_TYPE);
 
-    CloseableIterable<TrackedFileStruct> rows =
+    List<ManifestFile> manifests = Lists.newArrayList();
+    DirectRowAggregator directAgg = new DirectRowAggregator(snapshotSequenceNumber);
+    try (CloseableIterable<TrackedFileStruct> rows =
         InternalData.read(FileFormat.PARQUET, rootManifest)
             .project(contentEntrySchema)
             .setRootType(TrackedFileStruct.class)
@@ -81,12 +88,8 @@ class RootManifestReader {
             .setCustomType(TrackedFile.DELETION_VECTOR.fieldId(), DeletionVectorStruct.class)
             .setCustomType(TrackedFile.PARTITION_ID, PartitionData.class)
             .setCustomType(TrackedFile.MANIFEST_INFO.fieldId(), ManifestInfoStruct.class)
-            .build();
-
-    List<ManifestFile> manifests = Lists.newArrayList();
-    DirectRowAggregator directAgg = new DirectRowAggregator();
-    try {
-      for (TrackedFileStruct row : rows) {
+            .build()) {
+      for (TrackedFile row : rows) {
         FileContent content = row.contentType();
         if (content == FileContent.DATA_MANIFEST || content == FileContent.DELETE_MANIFEST) {
           manifests.add(toManifestFile(row));
@@ -100,14 +103,8 @@ class RootManifestReader {
               rootManifest.location());
         }
       }
-    } catch (Exception e) {
-      throw new RuntimeException("Failed to read root manifest: " + rootManifest.location(), e);
-    } finally {
-      try {
-        rows.close();
-      } catch (IOException e) {
-        LOG.warn("Failed to close root manifest reader for {}", rootManifest.location(), e);
-      }
+    } catch (IOException e) {
+      throw new UncheckedIOException("Failed to read root manifest: " + rootManifest.location(), e);
     }
 
     ManifestFile virtual = directAgg.build(rootManifest);
@@ -118,7 +115,7 @@ class RootManifestReader {
     return manifests;
   }
 
-  private static ManifestFile toManifestFile(TrackedFileStruct row) {
+  private static ManifestFile toManifestFile(TrackedFile row) {
     Tracking tracking = row.tracking();
     Preconditions.checkArgument(
         tracking != null, "Invalid root manifest entry: missing tracking struct");
@@ -194,7 +191,8 @@ class RootManifestReader {
     Schema contentEntrySchema =
         TrackedFile.schema(readPartitionType, TrackedFileWriter.ROOT_CONTENT_STATS_TYPE);
 
-    CloseableIterable<TrackedFileStruct> rows =
+    List<TrackedFile> directRows = Lists.newArrayList();
+    try (CloseableIterable<TrackedFileStruct> rows =
         InternalData.read(FileFormat.PARQUET, rootManifest)
             .project(contentEntrySchema)
             .setRootType(TrackedFileStruct.class)
@@ -202,24 +200,15 @@ class RootManifestReader {
             .setCustomType(TrackedFile.DELETION_VECTOR.fieldId(), DeletionVectorStruct.class)
             .setCustomType(TrackedFile.PARTITION_ID, PartitionData.class)
             .setCustomType(TrackedFile.MANIFEST_INFO.fieldId(), ManifestInfoStruct.class)
-            .build();
-
-    List<TrackedFile> directRows = Lists.newArrayList();
-    try {
-      for (TrackedFileStruct row : rows) {
+            .build()) {
+      for (TrackedFile row : rows) {
         if (row.contentType() == FileContent.DATA) {
-          directRows.add((TrackedFile) row.copy());
+          directRows.add(row.copy());
         }
       }
-    } catch (Exception e) {
-      throw new RuntimeException(
+    } catch (IOException e) {
+      throw new UncheckedIOException(
           "Failed to read direct data rows from root manifest: " + rootManifest.location(), e);
-    } finally {
-      try {
-        rows.close();
-      } catch (IOException e) {
-        LOG.warn("Failed to close root manifest reader for {}", rootManifest.location(), e);
-      }
     }
 
     return directRows;
@@ -236,6 +225,7 @@ class RootManifestReader {
     for (TrackedFile row : rows) {
       dataFiles.add(TrackedFileAdapters.asDataFile(row, specsById));
     }
+
     return dataFiles;
   }
 
@@ -265,6 +255,13 @@ class RootManifestReader {
    * via {@link Snapshot#dataManifests}.
    */
   private static class DirectRowAggregator {
+    // The snapshot's sequence number, passed in by the caller. This is the authoritative value for
+    // the synthesized virtual manifest's sequenceNumber field, because direct-row ADDED entries do
+    // not persist their data sequence number in tracking (it is assigned at commit time). Setting
+    // the virtual manifest's sequenceNumber here means InheritableMetadata correctly inherits it
+    // into null-dataSeq entries during scan.
+    private final long snapshotSequenceNumber;
+    private final List<TrackedFile> retainedRows = Lists.newArrayList();
     private int addedFiles = 0;
     private int existingFiles = 0;
     private int deletedFiles = 0;
@@ -282,13 +279,16 @@ class RootManifestReader {
     // current-commit row is present.
     private Long currentCommitSnapshotId = null;
     private Long fallbackSnapshotId = null;
-    private long sequenceNumber = 0L;
     private long minSequenceNumber = Long.MAX_VALUE;
     private Long firstRowId = null;
     private int formatVersion = TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE;
     private boolean sawRow = false;
 
-    void accumulate(TrackedFileStruct row) {
+    DirectRowAggregator(long snapshotSequenceNumber) {
+      this.snapshotSequenceNumber = snapshotSequenceNumber;
+    }
+
+    void accumulate(TrackedFile row) {
       sawRow = true;
       Tracking tracking = row.tracking();
       accumulateStatusCounts(tracking, row.recordCount());
@@ -302,6 +302,11 @@ class RootManifestReader {
       if (rowFormatVersion > formatVersion) {
         formatVersion = rowFormatVersion;
       }
+
+      // Defensive copy: retainedRows outlives the parquet reader (they are stashed on the
+      // synthetic RootDirectRowsManifestFile and later consumed via
+      // V4ManifestEntryProjector's cached-rows path), so decouple from any reader-internal buffers.
+      retainedRows.add(row.copy());
     }
 
     private void accumulateStatusCounts(Tracking tracking, long rowCount) {
@@ -360,7 +365,6 @@ class RootManifestReader {
 
       Long dataSeq = tracking.dataSequenceNumber();
       if (dataSeq != null) {
-        sequenceNumber = Math.max(sequenceNumber, dataSeq);
         minSequenceNumber = Math.min(minSequenceNumber, dataSeq);
       }
 
@@ -374,17 +378,9 @@ class RootManifestReader {
       if (!sawRow) {
         return null;
       }
-      // Skip virtual-manifest synthesis when the root carries only retirement rows
-      // (DELETED / REPLACED) — matches v3 semantics where a manifest whose entries are all
-      // not-live is filtered by MergingSnapshotProducer.shouldKeep. Callers of dataManifests()
-      // expect only manifests with live content; a virtual over pure-retirement rows would
-      // wrongly surface deleted files to metadata tables and scan planning.
-      if (addedFiles == 0 && existingFiles == 0) {
-        return null;
-      }
 
       long resolvedMinSequenceNumber =
-          minSequenceNumber == Long.MAX_VALUE ? sequenceNumber : minSequenceNumber;
+          minSequenceNumber == Long.MAX_VALUE ? snapshotSequenceNumber : minSequenceNumber;
       int resolvedSpecId = specId != null ? specId : 0;
       Long resolvedSnapshotId =
           currentCommitSnapshotId != null ? currentCommitSnapshotId : fallbackSnapshotId;
@@ -400,7 +396,7 @@ class RootManifestReader {
           rootManifest.location(),
           rootLength,
           resolvedSpecId,
-          sequenceNumber,
+          snapshotSequenceNumber,
           resolvedMinSequenceNumber,
           resolvedSnapshotId,
           addedFiles,
@@ -412,7 +408,8 @@ class RootManifestReader {
           firstRowId,
           formatVersion,
           replacedFiles > 0 ? replacedFiles : null,
-          replacedRows > 0 ? replacedRows : null);
+          replacedRows > 0 ? replacedRows : null,
+          retainedRows);
     }
   }
 }

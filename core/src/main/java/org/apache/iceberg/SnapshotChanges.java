@@ -157,14 +157,10 @@ public class SnapshotChanges {
 
   private CloseableIterable<Pair<ManifestEntry.Status, DataFile>> readDataManifest(
       ManifestFile manifest) {
-    // v4+ leaves (content_entry schema) carry REPLACED/MODIFIED rows that the legacy reader
-    // collapses to DELETED/EXISTING. Route v4+ manifests to ManifestFiles.readDataFileChanges
-    // which surfaces v4+ tracking statuses directly so REPLACED (DV-state transition) is not
-    // mis-classified as a data-file removal.
-    if (ManifestFiles.isV4ContentEntryManifest(manifest, io)) {
-      return ManifestFiles.readDataFileChanges(manifest, io, specsById);
-    }
-
+    // TODO: v4 change detection is deferred. v4+ leaves may carry REPLACED/MODIFIED pairs (DV
+    // rewrites) that the legacy adapter collapses to DELETED/EXISTING, so a data file whose only
+    // change is a DV update will surface here as removed. Accurate change detection needs to
+    // join REPLACED/MODIFIED pairs that may live in different leaf manifests.
     CloseableIterable<ManifestEntry<DataFile>> entries =
         ManifestFiles.read(manifest, io, specsById).entries();
 

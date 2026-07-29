@@ -28,7 +28,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
-import org.apache.iceberg.exceptions.RuntimeIOException;
 import org.apache.iceberg.expressions.Evaluator;
 import org.apache.iceberg.expressions.Expression;
 import org.apache.iceberg.expressions.Expressions;
@@ -188,13 +187,6 @@ class ManifestGroup {
                   Expression filter = ignoreResiduals ? Expressions.alwaysTrue() : dataFilter;
                   return ResidualEvaluator.of(spec, filter, caseSensitive);
                 });
-
-    // v4+ leaf data manifests can carry colocated deletion vectors. Extract them so they index by
-    // referencedDataFile() in DeleteFileIndex just like v3 standalone DV manifests would.
-    Iterable<DeleteFile> colocatedDVs = readColocatedDVs();
-    if (colocatedDVs != null) {
-      deleteIndexBuilder.addDeleteFiles(colocatedDVs);
-    }
 
     DeleteFileIndex deleteFiles = deleteIndexBuilder.scanMetrics(scanMetrics).build();
 
@@ -405,38 +397,41 @@ class ManifestGroup {
         entry -> {
           DataFile dataFile =
               ContentFileUtil.copy(entry.file(), ctx.shouldKeepStats(), ctx.columnsToKeepStats());
-          DeleteFile[] deleteFiles = ctx.deletes().forEntry(entry);
+          // v4 colocated DVs come inline on the ManifestEntry (populated by V4ManifestReader).
+          // The delete-file index only carries legacy standalone delete-manifest content, so skip
+          // the path-keyed lookup when it's empty — pure v4-native scans need no cross-manifest
+          // join, and this also side-steps DeleteFileIndex.forEntry's unconditional
+          // dataSequenceNumber unboxing on entries where the value can be null.
+          DeleteFile[] indexDeletes =
+              ctx.deletes().isEmpty() ? NO_DELETES : ctx.deletes().forEntry(entry);
+          DeleteFile[] deleteFiles = mergeInlineDV(entry.deletionVector(), indexDeletes);
           ScanMetricsUtil.fileTask(ctx.scanMetrics(), dataFile, deleteFiles);
           return new BaseFileScanTask(
               dataFile, deleteFiles, ctx.schemaAsString(), ctx.specAsString(), ctx.residuals());
         });
   }
 
+  private static final DeleteFile[] NO_DELETES = new DeleteFile[0];
+
   /**
-   * Reads colocated deletion vectors carried by v4+ leaf data manifests and returns them as {@link
-   * DeleteFile} instances for {@link DeleteFileIndex} to index by {@code referencedDataFile()}.
-   * Legacy (pre-v4) data manifests do not carry colocated DVs and contribute nothing. Returns null
-   * if no v4+ data manifests are present.
+   * Prepends a v4+ colocated deletion vector (carried inline on the manifest entry) to the array of
+   * deletes resolved from {@link DeleteFileIndex}. Colocated DVs bypass DeleteFileIndex because
+   * they are already keyed to a specific data file by physical row colocation — the index's
+   * path-keyed lookup is only needed for legacy standalone delete manifests (position or equality).
    */
-  private Iterable<DeleteFile> readColocatedDVs() {
-    List<DeleteFile> dvs = null;
-    for (ManifestFile manifest : dataManifests) {
-      if (manifest.formatVersion() < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
-        continue;
-      }
-      try (CloseableIterable<DeleteFile> iter =
-          ManifestFiles.readColocatedDVs(manifest, io, specsById)) {
-        for (DeleteFile dv : iter) {
-          if (dvs == null) {
-            dvs = Lists.newArrayList();
-          }
-          dvs.add(dv);
-        }
-      } catch (IOException e) {
-        throw new RuntimeIOException(e, "Failed to read colocated DVs from %s", manifest.path());
-      }
+  private static DeleteFile[] mergeInlineDV(DeleteFile inlineDV, DeleteFile[] indexDeletes) {
+    if (inlineDV == null) {
+      return indexDeletes;
     }
-    return dvs;
+
+    if (indexDeletes == null || indexDeletes.length == 0) {
+      return new DeleteFile[] {inlineDV};
+    }
+
+    DeleteFile[] merged = new DeleteFile[indexDeletes.length + 1];
+    merged[0] = inlineDV;
+    System.arraycopy(indexDeletes, 0, merged, 1, indexDeletes.length);
+    return merged;
   }
 
   @FunctionalInterface

@@ -184,14 +184,15 @@ public interface Snapshot extends Serializable {
   }
 
   /**
-   * Returns the format version of this snapshot. The default returns 0 as a sentinel for external
-   * implementations that predate this accessor; concrete Iceberg snapshots ({@code BaseSnapshot})
-   * override with the real value.
+   * Returns the format version of this snapshot. The default returns {@link
+   * ManifestFile#LEGACY_FORMAT_VERSION} as a sentinel for external implementations that predate
+   * this accessor; concrete Iceberg snapshots ({@code BaseSnapshot}) override with the real value.
    *
-   * @return the format version, or 0 if the implementation does not report one
+   * @return the format version, or {@link ManifestFile#LEGACY_FORMAT_VERSION} if the implementation
+   *     does not report one
    */
   default int formatVersion() {
-    return 0;
+    return ManifestFile.LEGACY_FORMAT_VERSION;
   }
 
   /**

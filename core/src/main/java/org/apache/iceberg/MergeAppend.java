@@ -19,6 +19,7 @@
 package org.apache.iceberg;
 
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
+import org.apache.iceberg.util.ContentFileUtil;
 
 /** {@link AppendFiles Append} implementation that produces a minimal number of manifest files. */
 class MergeAppend extends MergingSnapshotProducer<AppendFiles> implements AppendFiles {
@@ -39,6 +40,31 @@ class MergeAppend extends MergingSnapshotProducer<AppendFiles> implements Append
   @Override
   public MergeAppend appendFile(DataFile file) {
     add(file);
+    return this;
+  }
+
+  @Override
+  public MergeAppend appendFile(DataFile file, DeleteFile deletionVector) {
+    Preconditions.checkArgument(file != null, "Data file cannot be null");
+    Preconditions.checkArgument(deletionVector != null, "Deletion vector cannot be null");
+    int formatVersion = ops().current().formatVersion();
+    Preconditions.checkArgument(
+        formatVersion >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE,
+        "Cannot use born-with-DV appendFile for format version %s (minimum: %s)",
+        formatVersion,
+        TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE);
+    Preconditions.checkArgument(
+        ContentFileUtil.isDV(deletionVector),
+        "Deletion vector must be a puffin position-delete file: %s",
+        deletionVector.location());
+    Preconditions.checkArgument(
+        file.location().equals(deletionVector.referencedDataFile()),
+        "Deletion vector %s must reference data file %s (got %s)",
+        deletionVector.location(),
+        file.location(),
+        deletionVector.referencedDataFile());
+    add(file);
+    add(deletionVector);
     return this;
   }
 

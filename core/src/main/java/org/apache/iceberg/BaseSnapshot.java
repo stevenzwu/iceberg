@@ -32,6 +32,7 @@ import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.Iterables;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
+import org.apache.iceberg.util.Pair;
 
 class BaseSnapshot implements Snapshot {
   private final long snapshotId;
@@ -218,7 +219,8 @@ class BaseSnapshot implements Snapshot {
       if (formatVersion >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
         this.allManifests =
             RootManifests.read(
-                fileIO.newInputFile(new BaseSnapshotFile(snapshotFileLocation, keyId)));
+                fileIO.newInputFile(new BaseSnapshotFile(snapshotFileLocation, keyId)),
+                sequenceNumber);
       } else {
         this.allManifests =
             ManifestLists.read(
@@ -352,10 +354,9 @@ class BaseSnapshot implements Snapshot {
         Iterables.filter(
             dataManifests(fileIO), manifest -> Objects.equal(manifest.snapshotId(), snapshotId));
     for (ManifestFile manifest : changedDataManifests) {
-      try (org.apache.iceberg.io.CloseableIterable<
-              org.apache.iceberg.util.Pair<ManifestEntry.Status, DeleteFile>>
-          changes = ManifestFiles.readColocatedDVChanges(manifest, fileIO, null)) {
-        for (org.apache.iceberg.util.Pair<ManifestEntry.Status, DeleteFile> pair : changes) {
+      try (CloseableIterable<Pair<ManifestEntry.Status, DeleteFile>> changes =
+          ManifestFiles.readColocatedDVChanges(manifest, fileIO, null)) {
+        for (Pair<ManifestEntry.Status, DeleteFile> pair : changes) {
           switch (pair.first()) {
             case ADDED:
               adds.add(pair.second());
@@ -387,47 +388,27 @@ class BaseSnapshot implements Snapshot {
         Iterables.filter(
             dataManifests(fileIO), manifest -> Objects.equal(manifest.snapshotId(), snapshotId));
     for (ManifestFile manifest : changedManifests) {
-      // v4+ leaves (content_entry schema) carry REPLACED/MODIFIED rows that the legacy reader
-      // collapses to DELETED/EXISTING. Route v4+ manifests through readDataFileChanges so REPLACED
-      // (a DV-state transition) is not mis-classified as a data-file removal.
-      if (ManifestFiles.isV4ContentEntryManifest(manifest, fileIO)) {
-        try (org.apache.iceberg.io.CloseableIterable<
-                org.apache.iceberg.util.Pair<ManifestEntry.Status, DataFile>>
-            changes = ManifestFiles.readDataFileChanges(manifest, fileIO, null)) {
-          for (org.apache.iceberg.util.Pair<ManifestEntry.Status, DataFile> change : changes) {
-            switch (change.first()) {
-              case ADDED:
-                adds.add(change.second().copy());
-                break;
-              case DELETED:
-                deletes.add(change.second().copyWithoutStats());
-                break;
-              default:
-                // No other statuses surface from readDataFileChanges.
-            }
+      // TODO: v4 change detection is deferred. v4+ leaves may carry REPLACED/MODIFIED pairs (DV
+      // rewrites) that the legacy adapter collapses to DELETED/EXISTING, so a data file whose only
+      // change is a DV update will surface here as removed. Accurate change detection needs to
+      // join REPLACED/MODIFIED pairs that may live in different leaf manifests.
+      try (CloseableIterable<ManifestEntry<DataFile>> entries =
+          new ManifestGroup(fileIO, ImmutableList.of(manifest)).ignoreExisting().entries()) {
+        for (ManifestEntry<DataFile> entry : entries) {
+          switch (entry.status()) {
+            case ADDED:
+              adds.add(entry.file().copy());
+              break;
+            case DELETED:
+              deletes.add(entry.file().copyWithoutStats());
+              break;
+            default:
+              throw new IllegalStateException(
+                  "Unexpected entry status, not added or deleted: " + entry);
           }
-        } catch (IOException e) {
-          throw new RuntimeIOException(e, "Failed to close entries while caching changes");
         }
-      } else {
-        try (CloseableIterable<ManifestEntry<DataFile>> entries =
-            new ManifestGroup(fileIO, ImmutableList.of(manifest)).ignoreExisting().entries()) {
-          for (ManifestEntry<DataFile> entry : entries) {
-            switch (entry.status()) {
-              case ADDED:
-                adds.add(entry.file().copy());
-                break;
-              case DELETED:
-                deletes.add(entry.file().copyWithoutStats());
-                break;
-              default:
-                throw new IllegalStateException(
-                    "Unexpected entry status, not added or deleted: " + entry);
-            }
-          }
-        } catch (IOException e) {
-          throw new RuntimeIOException(e, "Failed to close entries while caching changes");
-        }
+      } catch (IOException e) {
+        throw new RuntimeIOException(e, "Failed to close entries while caching changes");
       }
     }
 

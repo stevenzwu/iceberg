@@ -30,7 +30,7 @@ import org.apache.iceberg.types.Types;
  * writes fully-formed {@link TrackedFile} rows verbatim and does no role-specific bookkeeping.
  *
  * <p>Role wrappers layer on top: {@link LeafManifestWriter} adds per-status counters and builds a
- * leaf {@link ManifestFile}; {@link RootManifestWriter} adds manifest-reference resolution and
+ * leaf {@link ManifestFile}; {@link RootManifestWriter} adds leaf-manifest-entry resolution and
  * builds a {@link SnapshotFile}. Both construct the appropriate {@code content_entry} appender
  * (leaf vs root schema and metadata) and wrap it in an instance of this class.
  *

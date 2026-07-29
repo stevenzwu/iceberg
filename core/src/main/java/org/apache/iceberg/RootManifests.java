@@ -28,8 +28,8 @@ import org.apache.iceberg.types.Types;
 
 /**
  * Factory for v4+ root manifest readers and writers. Root manifests are the v4+ replacement for the
- * manifest list; they use the {@code content_entry} Parquet schema and reference leaf data/delete
- * manifests via {@code DATA_MANIFEST} / {@code DELETE_MANIFEST} entries.
+ * manifest list; they use the {@code content_entry} Parquet schema and carry leaf-manifest-entries
+ * for leaf data/delete manifests via {@code DATA_MANIFEST} / {@code DELETE_MANIFEST} rows.
  *
  * <p>Analogous to {@link ManifestLists} for v1–v3.
  */
@@ -43,15 +43,15 @@ class RootManifests {
    * in root (small-write optimization) are skipped by {@link RootManifestReader} and so do not need
    * accurate partition decoding here.
    */
-  static List<ManifestFile> read(InputFile rootManifest) {
-    return RootManifestReader.read(rootManifest);
+  static List<ManifestFile> read(InputFile rootManifest, long snapshotSequenceNumber) {
+    return RootManifestReader.read(rootManifest, snapshotSequenceNumber);
   }
 
   /**
    * Creates a new {@link RootManifestWriter} for a v4+ root manifest with the null-stats
-   * placeholder content_stats type — appropriate for a root that carries only manifest reference
-   * rows. Callers that intend to append direct content-file rows (Phase 3 adaptive assembler) use
-   * the overload that accepts an explicit {@code contentStatsType}.
+   * placeholder content_stats type — appropriate for a root that carries only leaf-manifest-entry
+   * rows. Callers that intend to append direct content-file rows in root (Phase 3 adaptive
+   * assembler) use the overload that accepts an explicit {@code contentStatsType}.
    *
    * @param formatVersion the table format version; must be {@code >= 4}
    * @param outputFile the output file to write to
@@ -60,7 +60,7 @@ class RootManifests {
    * @param parentSnapshotId the parent snapshot ID, or null for the first snapshot
    * @param sequenceNumber the sequence number for the new snapshot
    * @param firstRowId the snapshot's first-row-id (initializes the per-data-manifest counter that
-   *     assigns first-row-id values to DATA manifest references that lack one)
+   *     assigns first-row-id values to DATA leaf-manifest-entries that lack one)
    * @param tableSchema the table's current schema; used together with {@code specsById} to compute
    *     the union partition type written for every content_entry row
    * @param specsById the table's full live partition spec map; the writer derives the partition

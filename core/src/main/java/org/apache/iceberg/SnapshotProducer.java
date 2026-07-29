@@ -66,6 +66,7 @@ import org.apache.iceberg.metrics.MetricsReporter;
 import org.apache.iceberg.metrics.Timer.Timed;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
+import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Sets;
@@ -121,9 +122,10 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
   private final long targetManifestSizeBytes;
   private final List<TrackedFile> v4AdaptiveNewLiveDataRows = Lists.newArrayList();
   private final List<TrackedFile> v4AdaptiveRetirementRows = Lists.newArrayList();
-  private long v4DrainedDirectRowRecords = 0L;
   private final FileFormat manifestFormat;
   private final Map<String, String> manifestWriterProps;
+
+  private long v4DrainedDirectRowRecords = 0L;
   private MetricsReporter reporter = LoggingMetricsReporter.instance();
   private volatile Long snapshotId = null;
   private TableMetadata base;
@@ -294,11 +296,19 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
   protected void validate(TableMetadata currentMetadata, Snapshot snapshot) {}
 
   /**
-   * Apply the update's changes to the given metadata and snapshot. Return the new manifest list.
+   * Applies the update's changes and returns the manifests the new snapshot records at its top
+   * level.
+   *
+   * <p>For v1–v3 this is the complete manifest list of the new snapshot: this commit's newly
+   * written data manifests plus the filtered and merged parent and delete manifests. For v4+ it is
+   * only the pre-built leaf manifests recorded in the root as leaf-manifest entries
+   * (caller-appended manifests, deletion-vector-rewritten leaves, and surviving parent leaves);
+   * this commit's new, retired, and DV-updated row content is instead staged into the adaptive-tree
+   * accumulator channels and drained into the root by {@link #applyRootManifest}.
    *
    * @param metadataToUpdate the base table metadata to apply changes to
-   * @param snapshot snapshot to apply the changes to
-   * @return a manifest list for the new snapshot.
+   * @param snapshot the parent snapshot the changes apply to
+   * @return the manifests recorded at the new snapshot's top level (see above)
    */
   protected abstract List<ManifestFile> apply(TableMetadata metadataToUpdate, Snapshot snapshot);
 
@@ -308,23 +318,22 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
     Snapshot parentSnapshot = SnapshotUtil.latestSnapshot(base, targetBranch);
 
     long sequenceNumber = base.nextSequenceNumber();
-    Long parentSnapshotId = parentSnapshot == null ? null : parentSnapshot.snapshotId();
 
     runValidations(parentSnapshot);
-
-    List<ManifestFile> manifests = apply(base, parentSnapshot);
 
     int formatVersion = base.formatVersion();
 
     if (formatVersion >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
-      return applyV4(manifests, parentSnapshot, sequenceNumber, formatVersion);
+      return applyRootManifest(parentSnapshot, sequenceNumber, formatVersion);
     } else {
-      return applyV3(manifests, parentSnapshotId, sequenceNumber, formatVersion);
+      return applyManifestList(parentSnapshot, sequenceNumber, formatVersion);
     }
   }
 
-  private Snapshot applyV3(
-      List<ManifestFile> manifests, Long parentSnapshotId, long sequenceNumber, int formatVersion) {
+  private Snapshot applyManifestList(
+      Snapshot parentSnapshot, long sequenceNumber, int formatVersion) {
+    Long parentSnapshotId = parentSnapshot == null ? null : parentSnapshot.snapshotId();
+    List<ManifestFile> manifests = apply(base, parentSnapshot);
     OutputFile manifestList = manifestListPath();
 
     ManifestListWriter writer =
@@ -392,12 +401,10 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
         writer.toManifestListFile().encryptionKeyID());
   }
 
-  private Snapshot applyV4(
-      List<ManifestFile> manifests,
-      Snapshot parentSnapshot,
-      long sequenceNumber,
-      int formatVersion) {
+  private Snapshot applyRootManifest(
+      Snapshot parentSnapshot, long sequenceNumber, int formatVersion) {
     Long parentSnapshotId = parentSnapshot == null ? null : parentSnapshot.snapshotId();
+    List<ManifestFile> preBuiltLeafManifests = apply(base, parentSnapshot);
 
     // No-op detection: if this commit's manifest set is identical to the parent's (same paths)
     // AND no direct-row content is queued in the accumulator input channels, none of the
@@ -411,7 +418,9 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
         && parentSnapshot.snapshotFileLocation() != null
         && v4AdaptiveNewLiveDataRows.isEmpty()
         && v4AdaptiveRetirementRows.isEmpty()
-        && isNoOp(manifests, parentSnapshot.allManifests(ops.io()))) {
+        && isNoOp(
+            preBuiltLeafManifests,
+            filterVirtualDirectRows(parentSnapshot.allManifests(ops.io())))) {
       return new BaseSnapshot(
           formatVersion,
           sequenceNumber,
@@ -428,12 +437,14 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
     }
 
     // Enrich manifest metadata in parallel (same pattern as v3).
-    ManifestFile[] manifestFiles = new ManifestFile[manifests.size()];
+    ManifestFile[] manifestFiles = new ManifestFile[preBuiltLeafManifests.size()];
     Tasks.range(manifestFiles.length)
         .stopOnFailure()
         .throwFailureWhenFinished()
         .executeWith(workerPool())
-        .run(index -> manifestFiles[index] = manifestsWithMetadata.get(manifests.get(index)));
+        .run(
+            index ->
+                manifestFiles[index] = manifestsWithMetadata.get(preBuiltLeafManifests.get(index)));
 
     long currentSnapshotId = snapshotId();
 
@@ -503,10 +514,10 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
    * derivation and specId on the leaf's manifest header — the on-disk partition type is the union.
    *
    * <p>Every live-pool row's record count contributes to {@link #v4DrainedDirectRowRecords}, which
-   * applyV4 folds into the snapshot's added-rows total. The counter covers both rows that end up as
-   * promoted-root direct rows and rows that ended up in accumulator-rolled leaves (the rolled
-   * leaves are not in {@code manifestFiles}, so {@link #computeAssignedRows} would otherwise miss
-   * them).
+   * applyRootManifest folds into the snapshot's added-rows total. The counter covers both rows that
+   * end up as promoted-root direct rows and rows that ended up in accumulator-rolled leaves (the
+   * rolled leaves are not in {@code manifestFiles}, so {@link #computeAssignedRows} would otherwise
+   * miss them).
    *
    * <p>Retirement rows unpacked from source manifests filtered by {@code ManifestFilterManager} are
    * drained here from {@link #v4AdaptiveRetirementRows}: DELETED rows land in the deleted
@@ -546,11 +557,11 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
     // rows are referenced from no leaf manifest, so snapshot.allManifests() misses them. They are
     // EXISTING, so they do not contribute to v4DrainedDirectRowRecords.
     for (TrackedFile row : readParentDirectRowsAsExisting(parentSnapshot)) {
-      accumulator.add(row, true);
+      accumulator.add(row);
     }
 
     for (TrackedFile row : v4AdaptiveNewLiveDataRows) {
-      accumulator.add(row, true);
+      accumulator.add(row);
       // Freshly-added rows carry newly-assigned first-row-ids that no external ManifestFile's
       // addedRowsCount surfaces to computeAssignedRows; the counter covers both rows destined for
       // the promoted-root as direct rows and rows destined for accumulator-rolled leaves.
@@ -561,11 +572,11 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
 
     // Retirement rows (unpacked from source manifests being filtered): EXISTING survivors flow into
     // the live pool, DELETED retirements flow into the deleted-retirement pool. The accumulator
-    // routes by row status, so the isLive flag is not consulted for classification. Retirement
-    // rows do not add to v4DrainedDirectRowRecords: their firstRowId was already assigned in the
-    // prior snapshot that produced them, so they are not "newly-added" rows for this commit.
+    // routes by row status. Retirement rows do not add to v4DrainedDirectRowRecords: their
+    // firstRowId was already assigned in the prior snapshot that produced them, so they are not
+    // "newly-added" rows for this commit.
     for (TrackedFile row : v4AdaptiveRetirementRows) {
-      accumulator.add(row, false);
+      accumulator.add(row);
     }
 
     for (ManifestFile external : externalManifests) {
@@ -573,7 +584,7 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
           external.snapshotId() != null && external.snapshotId() == currentSnapshotId
               ? EntryStatus.ADDED
               : EntryStatus.EXISTING;
-      accumulator.addExternalLeafReference(external, status);
+      accumulator.addExternalLeafManifestEntry(external, status);
     }
 
     return accumulator.close(snapId, sequenceNumber, base.nextRowId());
@@ -593,7 +604,7 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
     if (parentSnapshot == null
         || parentSnapshot.formatVersion()
             < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
-      return java.util.Collections.emptyList();
+      return ImmutableList.of();
     }
     TableMetadata current = ops.current();
     Map<Integer, PartitionSpec> specsById = current.specsById();
@@ -601,7 +612,7 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
         RootManifestReader.readDirectRows(
             ops.io().newInputFile(parentSnapshot.snapshotFileLocation()), specsById);
     if (raw.isEmpty()) {
-      return java.util.Collections.emptyList();
+      return ImmutableList.of();
     }
 
     Types.StructType unionPartitionType = Partitioning.unionPartitionTypes(specsById.values());
@@ -657,9 +668,10 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
   /**
    * Appends a {@link TrackedFile} row to the v4 adaptive-tree live-data channel. Called by
    * v4-adaptive producer subclasses that route new content files directly into the accumulator
-   * instead of writing leaf manifests up front; {@link #assembleRoot} drains this buffer when the
-   * adaptive-tree flag is on. Every row lands in the same non-per-spec pool — its partition tuple
-   * must already be projected into the table-wide union partition type by the wrapper.
+   * instead of writing leaf manifests up front; {@link #runAdaptiveDrainAndPromote} drains this
+   * buffer when the adaptive-tree flag is on. Every row lands in the same non-per-spec pool — its
+   * partition tuple must already be projected into the table-wide union partition type by the
+   * wrapper.
    */
   void addV4AdaptiveNewLiveDataRow(TrackedFile row) {
     Preconditions.checkArgument(row != null, "Invalid TrackedFile row: null");
@@ -721,7 +733,7 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
    * reusable wrapper shared across rows corrupts the buffer). Rows from any spec share one
    * accumulator pool: every wrapper uses the table-wide union partition type so per-file partitions
    * project uniformly, and the {@link MetricsConfig}-derived stats shape matches the root writer's
-   * schema chosen in {@link #applyV4}.
+   * schema chosen in {@link #applyRootManifest}.
    *
    * <p>When {@code bornWithDVByPath} contains a DV for a file's path, the row is wrapped via the
    * 3-arg {@link TrackedFileAdapters.DataTrackedFile#wrap(DataFile, Tracking, DeletionVector)}
@@ -780,6 +792,24 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
    * set by path. In that case no new manifest content was produced and the parent's root manifest
    * can be reused, avoiding orphan root-manifest files for no-op commits.
    */
+  /**
+   * Strips the synthetic {@link RootDirectRowsManifestFile} entries from a snapshot's manifest
+   * list. Subclasses' {@code apply()} does not include the virtual in its returned manifests, so
+   * the parent's list must be normalized the same way before the two are compared.
+   */
+  private static List<ManifestFile> filterVirtualDirectRows(List<ManifestFile> manifestList) {
+    if (manifestList == null || manifestList.isEmpty()) {
+      return manifestList;
+    }
+    List<ManifestFile> filtered = Lists.newArrayListWithCapacity(manifestList.size());
+    for (ManifestFile manifest : manifestList) {
+      if (!(manifest instanceof RootDirectRowsManifestFile)) {
+        filtered.add(manifest);
+      }
+    }
+    return filtered;
+  }
+
   private static boolean isNoOp(List<ManifestFile> manifests, List<ManifestFile> parentManifests) {
     if (manifests.size() != parentManifests.size()) {
       return false;

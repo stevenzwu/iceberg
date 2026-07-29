@@ -101,9 +101,11 @@ class StreamingLeafManifestWriter {
    * one on the spot to hold the promotion content. Promotion is terminal — ownership transfers to
    * the caller and this streaming writer must not be used further.
    *
-   * @param snapshotId the committing snapshot id, used to resolve {@code UNASSIGNED_SEQ} on refs
+   * @param snapshotId the committing snapshot id, used to resolve {@code UNASSIGNED_SEQ} on
+   *     leaf-manifest-entries
    * @param sequenceNumber the committing sequence number
-   * @param nextRowId the running first-row-id counter for freshly-written DATA manifest refs
+   * @param nextRowId the running first-row-id counter for freshly-written DATA
+   *     leaf-manifest-entries
    * @throws IllegalStateException if already promoted
    */
   RootManifestWriter promoteCurrentToRoot(long snapshotId, long sequenceNumber, Long nextRowId) {
@@ -130,14 +132,27 @@ class StreamingLeafManifestWriter {
   }
 
   private void closeCurrentAsLeaf() {
+    LeafManifestWriter writer = currentWriter;
+    boolean threw = true;
     try {
-      currentWriter.close();
+      writer.close();
+      completedLeaves.add(writer.toManifestFile());
+      this.currentWriter = null;
+      this.rowsInCurrentWriter = 0;
+      threw = false;
     } catch (IOException e) {
       throw new UncheckedIOException("Failed to close leaf writer", e);
-    }
+    } finally {
+      if (threw) {
+        try {
+          writer.close();
+        } catch (Exception suppressed) {
+          // best-effort cleanup — swallow to avoid masking the original failure
+        }
 
-    completedLeaves.add(currentWriter.toManifestFile());
-    this.currentWriter = null;
-    this.rowsInCurrentWriter = 0;
+        this.currentWriter = null;
+        this.rowsInCurrentWriter = 0;
+      }
+    }
   }
 }

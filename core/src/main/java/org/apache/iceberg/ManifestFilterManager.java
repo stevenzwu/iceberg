@@ -165,6 +165,17 @@ abstract class ManifestFilterManager<F extends ContentFile<F>> {
    */
   protected void resetV4AdaptiveState() {}
 
+  /**
+   * Called at the top of every {@code MergingSnapshotProducer.apply} pass so v4 retirement inputs
+   * routed by {@link #filterDirectDataFiles} on a prior attempt (which are re-populated by the next
+   * attempt) do not accumulate across {@code CommitFailedException} retries. Clears the manager's
+   * own direct-deleted-files set alongside any subclass adaptive state.
+   */
+  void resetV4PerApplyBuffers() {
+    directDeletedFiles.clear();
+    resetV4AdaptiveState();
+  }
+
   protected void failAnyDelete() {
     this.failAnyDelete = true;
   }

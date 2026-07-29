@@ -34,10 +34,10 @@ import org.apache.iceberg.types.Types;
 
 /**
  * Writes a v4+ root manifest — the replacement for the manifest list. Each row is either a
- * leaf-manifest-entry (a reference to a leaf data/delete manifest, {@code
- * content_type=DATA_MANIFEST} / {@code DELETE_MANIFEST}) or a direct content-file row (the
- * adaptive-tree small-write optimization). Parallels {@link ManifestListWriter} for v1–v3,
- * generalized to the {@link TrackedFile} {@code content_entry} schema.
+ * leaf-manifest-entry pointing at a leaf data/delete manifest ({@code content_type=DATA_MANIFEST} /
+ * {@code DELETE_MANIFEST}) or a direct content-file row in root (the adaptive-tree small-write
+ * optimization). Parallels {@link ManifestListWriter} for v1–v3, generalized to the {@link
+ * TrackedFile} {@code content_entry} schema.
  *
  * <p>Two ways to open one:
  *
@@ -50,7 +50,7 @@ import org.apache.iceberg.types.Types;
  */
 class RootManifestWriter implements Closeable {
   private final TrackedFileWriter writer;
-  private final TrackedFileAdapters.ManifestTrackedFile refWrapper =
+  private final TrackedFileAdapters.ManifestTrackedFile leafEntryWrapper =
       TrackedFileAdapters.forManifestReference();
   private final StandardEncryptionManager standardEncryptionManager;
   private final NativeEncryptionKeyMetadata keyMetadata;
@@ -82,7 +82,8 @@ class RootManifestWriter implements Closeable {
    * @param partitionType the union of every live partition spec's partition type; wrapped in the
    *     empty-partition placeholder when empty
    * @param contentStatsType the content_stats struct type the writer encodes; use {@link
-   *     TrackedFileWriter#ROOT_CONTENT_STATS_TYPE} for reference-only root manifests
+   *     TrackedFileWriter#ROOT_CONTENT_STATS_TYPE} for a root that carries only leaf-manifest
+   *     entries (no direct content-file rows)
    */
   static RootManifestWriter create(
       OutputFile file,
@@ -155,8 +156,8 @@ class RootManifestWriter implements Closeable {
     Preconditions.checkState(!closed, "Cannot add to a closed RootManifestWriter");
     ManifestFile resolved = assignSequenceNumber(manifest);
     Long firstRowId = resolveFirstRowId(resolved);
-    refWrapper.wrap(resolved, status, firstRowId);
-    writer.add(refWrapper);
+    leafEntryWrapper.wrap(resolved, status, firstRowId);
+    writer.add(leafEntryWrapper);
   }
 
   Metrics metrics() {

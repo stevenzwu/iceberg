@@ -506,7 +506,9 @@ public class TestManifestWriterVersions {
     // field 134 (content_type) and field 157 (format_version) must be present
     ManifestFile manifest = writeManifest(4, FileFormat.PARQUET, SPEC, DATA_FILE);
 
-    InputFile inputFile = io.newInputFile(manifest.path());
+    // Use the ManifestFile overload so EncryptingFileIO subclasses attach the key metadata for
+    // Parquet's footer decryption (plain io.newInputFile(String) would return an unencrypted view).
+    InputFile inputFile = io.newInputFile(manifest);
     Schema narrowSchema = new Schema(TrackedFile.CONTENT_TYPE, TrackedFile.FORMAT_VERSION);
 
     try (CloseableIterable<TrackedFileStruct> rows =
@@ -516,7 +518,7 @@ public class TestManifestWriterVersions {
             .build()) {
       TrackedFileStruct row = Iterables.getOnlyElement(rows);
       assertThat(row.contentType()).isEqualTo(FileContent.DATA);
-      assertThat(row.formatVersion()).isEqualTo(V4ManifestReader.SUPPORTED_FORMAT_VERSION);
+      assertThat(row.formatVersion()).isEqualTo(V4ManifestEntryProjector.SUPPORTED_FORMAT_VERSION);
     }
   }
 
@@ -526,7 +528,7 @@ public class TestManifestWriterVersions {
     // field 134 (content_type) must report EQUALITY_DELETES
     ManifestFile manifest = writeDeleteManifest(4, FileFormat.PARQUET, SPEC);
 
-    InputFile inputFile = io.newInputFile(manifest.path());
+    InputFile inputFile = io.newInputFile(manifest);
     Schema narrowSchema = new Schema(TrackedFile.CONTENT_TYPE, TrackedFile.FORMAT_VERSION);
 
     try (CloseableIterable<TrackedFileStruct> rows =
@@ -536,7 +538,7 @@ public class TestManifestWriterVersions {
             .build()) {
       TrackedFileStruct row = Iterables.getOnlyElement(rows);
       assertThat(row.contentType()).isEqualTo(FileContent.EQUALITY_DELETES);
-      assertThat(row.formatVersion()).isEqualTo(V4ManifestReader.SUPPORTED_FORMAT_VERSION);
+      assertThat(row.formatVersion()).isEqualTo(V4ManifestEntryProjector.SUPPORTED_FORMAT_VERSION);
     }
   }
 
@@ -734,7 +736,7 @@ public class TestManifestWriterVersions {
     InputFile manifestList = writeManifestList(manifest, formatVersion);
     List<ManifestFile> manifests =
         formatVersion >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE
-            ? RootManifests.read(manifestList)
+            ? RootManifests.read(manifestList, SEQUENCE_NUMBER)
             : ManifestLists.read(manifestList);
     assertThat(manifests).hasSize(1);
     return manifests.get(0);

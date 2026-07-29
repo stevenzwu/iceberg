@@ -259,6 +259,45 @@ class TrackedFileStruct extends SupportsIndexProjection implements TrackedFile, 
     return new TrackedFileStruct(this, requestedColumnIds);
   }
 
+  /**
+   * Materializes an independent, stats-free {@link TrackedFile} from {@code source}, which may be a
+   * reusable write-direction wrapper. The partition tuple is copied into a fresh {@link
+   * PartitionData} of {@code partitionType}; tracking and any deletion vector are deep-copied;
+   * column stats are dropped. Buffering writers that retain rows past a reusable wrapper's lifetime
+   * use this so retired (DELETED/REPLACED) entries — which are never read for column bounds — carry
+   * their own state without aliasing the wrapper.
+   */
+  static TrackedFile materializeWithoutStats(TrackedFile source, Types.StructType partitionType) {
+    StructLike sourcePartition = source.partition();
+    PartitionData partition = null;
+    if (sourcePartition != null) {
+      partition = new PartitionData(partitionType);
+      for (int pos = 0; pos < partitionType.fields().size(); pos += 1) {
+        partition.set(pos, sourcePartition.get(pos, Object.class));
+      }
+    }
+
+    Tracking tracking = source.tracking();
+    DeletionVector deletionVector = source.deletionVector();
+    return new TrackedFileStruct(
+        tracking != null ? tracking.copy() : null,
+        source.contentType(),
+        source.formatVersion(),
+        source.location(),
+        source.fileFormat(),
+        source.recordCount(),
+        source.fileSizeInBytes(),
+        source.specId(),
+        partition,
+        null /* stats dropped: retired entries are non-live and never scanned for column bounds */,
+        source.sortOrderId(),
+        deletionVector != null ? deletionVector.copy() : null,
+        source.manifestInfo(),
+        source.keyMetadata(),
+        source.splitOffsets(),
+        source.equalityIds());
+  }
+
   @Override
   protected <T> T internalGet(int pos, Class<T> javaClass) {
     return javaClass.cast(getByPos(pos));

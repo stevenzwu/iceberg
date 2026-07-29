@@ -195,7 +195,7 @@ class LeafManifestWriter {
   /**
    * Promotes this still-open leaf writer to a {@link RootManifestWriter} over the same appender:
    * its already-written rows become direct rows in the root. The leaf schema admits null-stats /
-   * null-partition manifest-reference rows (its partition and content_stats columns are optional),
+   * null-partition leaf-manifest-entry rows (its partition and content_stats columns are optional),
    * so the resulting root can carry leaf-manifest-entries. Leaf counters are abandoned — a root
    * manifest does not surface per-status leaf counts. The caller owns the returned writer's {@link
    * RootManifestWriter#close()}.

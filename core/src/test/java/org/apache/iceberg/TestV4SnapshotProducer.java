@@ -28,7 +28,9 @@ import java.util.List;
 import java.util.stream.Collectors;
 import org.apache.iceberg.io.CloseableIterable;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
+import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
+import org.apache.iceberg.types.Conversions;
 import org.apache.iceberg.types.Types;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -39,8 +41,9 @@ import org.junit.jupiter.api.io.TempDir;
  * v4 table writes a root manifest ({@code .parquet}) instead of a manifest list ({@code .avro}),
  * and that manifest reference entries carry the correct {@link EntryStatus} and format_version.
  *
- * <p>Tests use a <em>partitioned</em> v4 table to avoid the Phase 2 known-issue with empty Parquet
- * row-groups in unpartitioned cases.
+ * <p>Most tests use a partitioned v4 table; {@link #testUnpartitionedV4RoundTrips} covers the
+ * unpartitioned case, where the empty partition type maps to {@code UnknownType} so no partition
+ * column is written (read back as null).
  */
 public class TestV4SnapshotProducer {
 
@@ -52,12 +55,33 @@ public class TestV4SnapshotProducer {
   private static final PartitionSpec SPEC =
       PartitionSpec.builderFor(SCHEMA).bucket("data", 16).build();
 
+  // Column-level stats for id=3:int, data=4:string. Each fixture picks distinct (id, data) bounds
+  // so any test that later asserts a specific file's stats survived a rewrite is anchored to the
+  // source file — sharing bounds would let a test pass by accidentally reading a different row's
+  // bytes. {@link #buildInjectedDataRow} strips stats via {@code copyWithoutStats()} because the
+  // raw-inject helper path does not tolerate DataFile-provided stats (unrelated to real append
+  // flows).
+  private static Metrics metrics(int id, String data) {
+    return new Metrics(
+        1L,
+        ImmutableMap.of(3, 4L, 4, 8L),
+        ImmutableMap.of(3, 1L, 4, 1L),
+        ImmutableMap.of(3, 0L, 4, 0L),
+        null,
+        ImmutableMap.of(
+            3, Conversions.toByteBuffer(Types.IntegerType.get(), id),
+            4, Conversions.toByteBuffer(Types.StringType.get(), data)),
+        ImmutableMap.of(
+            3, Conversions.toByteBuffer(Types.IntegerType.get(), id),
+            4, Conversions.toByteBuffer(Types.StringType.get(), data)));
+  }
+
   private static final DataFile FILE_A =
       DataFiles.builder(SPEC)
           .withPath("/path/to/data-a.parquet")
           .withFileSizeInBytes(10)
           .withPartitionPath("data_bucket=0")
-          .withRecordCount(1)
+          .withMetrics(metrics(1, "a"))
           .build();
 
   private static final DataFile FILE_B =
@@ -65,7 +89,7 @@ public class TestV4SnapshotProducer {
           .withPath("/path/to/data-b.parquet")
           .withFileSizeInBytes(10)
           .withPartitionPath("data_bucket=1")
-          .withRecordCount(1)
+          .withMetrics(metrics(2, "b"))
           .build();
 
   @TempDir File tableDir;
@@ -81,32 +105,17 @@ public class TestV4SnapshotProducer {
 
   // ---- helpers ----------------------------------------------------------------
 
-  private List<TrackedFileStruct> readRootManifestRows(String rootManifestLocation)
-      throws IOException {
-    Schema contentEntrySchema =
-        TrackedFile.schema(
-            TrackedFileWriter.emptyPartitionPlaceholderIfNeeded(
-                org.apache.iceberg.types.Types.StructType.of()),
-            TrackedFileWriter.ROOT_CONTENT_STATS_TYPE);
-
-    CloseableIterable<TrackedFileStruct> rows =
-        InternalData.read(FileFormat.PARQUET, table.io().newInputFile(rootManifestLocation))
-            .project(contentEntrySchema)
-            .setRootType(TrackedFileStruct.class)
-            .setCustomType(TrackedFile.TRACKING.fieldId(), TrackingStruct.class)
-            .setCustomType(TrackedFile.PARTITION_ID, PartitionData.class)
-            .setCustomType(TrackedFile.MANIFEST_INFO.fieldId(), ManifestInfoStruct.class)
-            .build();
-
-    ImmutableList.Builder<TrackedFileStruct> result = ImmutableList.builder();
-    try {
-      for (TrackedFileStruct row : rows) {
-        result.add(row);
-      }
-    } finally {
-      rows.close();
+  private List<TrackedFile> readRootManifestRows(String rootManifestLocation) throws IOException {
+    TableMetadata current = table.ops().current();
+    try (V4ManifestEntryProjector projector =
+        new V4ManifestEntryProjector(
+            table.io().newInputFile(rootManifestLocation),
+            ManifestContent.DATA,
+            current.defaultSpecId(),
+            current.specsById(),
+            InheritableMetadataFactory.empty())) {
+      return Lists.newArrayList(projector.rawRows());
     }
-    return result.build();
   }
 
   private List<ManifestEntry<DataFile>> readLeafManifestEntries(ManifestFile manifest)
@@ -125,6 +134,44 @@ public class TestV4SnapshotProducer {
       }
     }
     return result.build();
+  }
+
+  /**
+   * Data manifests that are real on-disk leaves — i.e. everything except the virtual manifest that
+   * {@link RootManifestReader} synthesizes over the root's direct rows (whose path is the root
+   * manifest itself). A non-empty result means the snapshot is a 2-level tree.
+   */
+  private List<ManifestFile> realLeaves(Snapshot snap) {
+    return snap.dataManifests(table.io()).stream()
+        .filter(m -> !m.path().equals(snap.snapshotFileLocation()))
+        .collect(Collectors.toList());
+  }
+
+  private List<DataFile> newDataFiles(String prefix, int startBucket, int count) {
+    List<DataFile> files = Lists.newArrayList();
+    for (int i = 0; i < count; i++) {
+      int bucket = startBucket + i;
+      files.add(
+          DataFiles.builder(SPEC)
+              .withPath("/path/to/data-" + prefix + "-" + bucket + ".parquet")
+              .withFileSizeInBytes(10)
+              .withPartitionPath("data_bucket=" + bucket)
+              .withMetrics(metrics(100 + bucket, prefix + "-" + bucket))
+              .build());
+    }
+
+    return files;
+  }
+
+  private List<String> planFileLocations() throws IOException {
+    List<String> paths = Lists.newArrayList();
+    try (CloseableIterable<FileScanTask> tasks = table.newScan().planFiles()) {
+      for (FileScanTask task : tasks) {
+        paths.add(task.file().location());
+      }
+    }
+
+    return paths;
   }
 
   // ---- tests ------------------------------------------------------------------
@@ -158,10 +205,10 @@ public class TestV4SnapshotProducer {
         .hasMessageContaining("has no manifest list");
 
     // Root manifest must carry exactly one DATA direct row (no on-disk leaf).
-    List<TrackedFileStruct> rootRows = readRootManifestRows(snap.snapshotFileLocation());
+    List<TrackedFile> rootRows = readRootManifestRows(snap.snapshotFileLocation());
     assertThat(rootRows).hasSize(1);
 
-    TrackedFileStruct rootEntry = rootRows.get(0);
+    TrackedFile rootEntry = rootRows.get(0);
     assertThat(rootEntry.contentType())
         .as("root entry must be a DATA direct row")
         .isEqualTo(FileContent.DATA);
@@ -201,7 +248,9 @@ public class TestV4SnapshotProducer {
         .as("root manifest location must be set for v4")
         .isNotNull()
         .endsWith(".parquet");
-    assertThatThrownBy(snap::manifestListLocation).isInstanceOf(IllegalStateException.class);
+    assertThatThrownBy(snap::manifestListLocation)
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("has no manifest list");
 
     // Phase 4d: direct rows are surfaced via a synthetic virtual manifest whose path is the root
     // manifest itself. No on-disk leaf manifest is written, so the only data manifest surfaced is
@@ -212,7 +261,7 @@ public class TestV4SnapshotProducer {
         .as("virtual manifest must point at the promoted root itself")
         .isEqualTo(snap.snapshotFileLocation());
 
-    List<TrackedFileStruct> rootRows = readRootManifestRows(snap.snapshotFileLocation());
+    List<TrackedFile> rootRows = readRootManifestRows(snap.snapshotFileLocation());
     assertThat(rootRows).hasSize(2);
     assertThat(rootRows)
         .allSatisfy(
@@ -221,7 +270,7 @@ public class TestV4SnapshotProducer {
               assertThat(row.tracking().status()).isEqualTo(EntryStatus.ADDED);
             });
     assertThat(rootRows)
-        .extracting(TrackedFileStruct::location)
+        .extracting(TrackedFile::location)
         .containsExactlyInAnyOrder(FILE_A.location(), FILE_B.location());
   }
 
@@ -242,7 +291,7 @@ public class TestV4SnapshotProducer {
             .withPath("/path/to/data-c.parquet")
             .withFileSizeInBytes(10)
             .withPartitionPath("data_bucket=2")
-            .withRecordCount(1)
+            .withMetrics(metrics(3, "c"))
             .build();
     table.newAppend().appendFile(fileC).commit();
 
@@ -282,9 +331,9 @@ public class TestV4SnapshotProducer {
     table.newDelete().deleteFile(FILE_A).commit();
 
     Snapshot child = table.currentSnapshot();
-    List<TrackedFileStruct> rootRows = readRootManifestRows(child.snapshotFileLocation());
+    List<TrackedFile> rootRows = readRootManifestRows(child.snapshotFileLocation());
     // Data-file direct rows only (exclude any DATA_MANIFEST entries).
-    List<TrackedFileStruct> dataRows =
+    List<TrackedFile> dataRows =
         rootRows.stream()
             .filter(r -> r.contentType() == FileContent.DATA)
             .collect(Collectors.toList());
@@ -295,11 +344,11 @@ public class TestV4SnapshotProducer {
         .hasSize(2);
     assertThat(dataRows)
         .filteredOn(r -> r.tracking().status() == EntryStatus.EXISTING)
-        .extracting(TrackedFileStruct::location)
+        .extracting(TrackedFile::location)
         .containsExactly(FILE_B.location());
     assertThat(dataRows)
         .filteredOn(r -> r.tracking().status() == EntryStatus.DELETED)
-        .extracting(TrackedFileStruct::location)
+        .extracting(TrackedFile::location)
         .containsExactly(FILE_A.location());
   }
 
@@ -316,7 +365,7 @@ public class TestV4SnapshotProducer {
             .withPath("/path/to/data-c.parquet")
             .withFileSizeInBytes(10)
             .withPartitionPath("data_bucket=2")
-            .withRecordCount(1)
+            .withMetrics(metrics(3, "c"))
             .build();
 
     // Snap 1: FILE_A and FILE_B land as direct rows.
@@ -326,23 +375,23 @@ public class TestV4SnapshotProducer {
     table.newOverwrite().deleteFile(FILE_A).addFile(fileC).commit();
 
     Snapshot child = table.currentSnapshot();
-    List<TrackedFileStruct> rootRows = readRootManifestRows(child.snapshotFileLocation());
-    List<TrackedFileStruct> dataRows =
+    List<TrackedFile> rootRows = readRootManifestRows(child.snapshotFileLocation());
+    List<TrackedFile> dataRows =
         rootRows.stream()
             .filter(r -> r.contentType() == FileContent.DATA)
             .collect(Collectors.toList());
 
     assertThat(dataRows)
         .filteredOn(r -> r.tracking().status() == EntryStatus.ADDED)
-        .extracting(TrackedFileStruct::location)
+        .extracting(TrackedFile::location)
         .containsExactly(fileC.location());
     assertThat(dataRows)
         .filteredOn(r -> r.tracking().status() == EntryStatus.EXISTING)
-        .extracting(TrackedFileStruct::location)
+        .extracting(TrackedFile::location)
         .containsExactly(FILE_B.location());
     assertThat(dataRows)
         .filteredOn(r -> r.tracking().status() == EntryStatus.DELETED)
-        .extracting(TrackedFileStruct::location)
+        .extracting(TrackedFile::location)
         .containsExactly(FILE_A.location());
   }
 
@@ -364,18 +413,18 @@ public class TestV4SnapshotProducer {
     table.newDelete().deleteFile(FILE_A).validateFilesExist().commit();
 
     Snapshot child = table.currentSnapshot();
-    List<TrackedFileStruct> rootRows = readRootManifestRows(child.snapshotFileLocation());
-    List<TrackedFileStruct> dataRows =
+    List<TrackedFile> rootRows = readRootManifestRows(child.snapshotFileLocation());
+    List<TrackedFile> dataRows =
         rootRows.stream()
             .filter(r -> r.contentType() == FileContent.DATA)
             .collect(Collectors.toList());
     assertThat(dataRows)
         .filteredOn(r -> r.tracking().status() == EntryStatus.DELETED)
-        .extracting(TrackedFileStruct::location)
+        .extracting(TrackedFile::location)
         .containsExactly(FILE_A.location());
     assertThat(dataRows)
         .filteredOn(r -> r.tracking().status() == EntryStatus.EXISTING)
-        .extracting(TrackedFileStruct::location)
+        .extracting(TrackedFile::location)
         .containsExactly(FILE_B.location());
   }
 
@@ -432,7 +481,7 @@ public class TestV4SnapshotProducer {
         .hasSize(1)
         .allSatisfy(m -> assertThat(m.path()).isEqualTo(snap.snapshotFileLocation()));
 
-    List<TrackedFileStruct> rootRows = readRootManifestRows(snap.snapshotFileLocation());
+    List<TrackedFile> rootRows = readRootManifestRows(snap.snapshotFileLocation());
     assertThat(rootRows).as("both injected rows must land as root direct rows").hasSize(2);
     assertThat(rootRows)
         .allSatisfy(
@@ -441,7 +490,7 @@ public class TestV4SnapshotProducer {
               assertThat(row.tracking().status()).isEqualTo(EntryStatus.ADDED);
             });
     assertThat(rootRows)
-        .extracting(TrackedFileStruct::location)
+        .extracting(TrackedFile::location)
         .containsExactlyInAnyOrder(FILE_A.location(), FILE_B.location());
   }
 
@@ -468,7 +517,7 @@ public class TestV4SnapshotProducer {
     List<ManifestFile> leaves = snap.dataManifests(table.io());
     assertThat(leaves).as("with target-size=1 every row exceeds the spill threshold").isNotEmpty();
 
-    List<TrackedFileStruct> rootRows = readRootManifestRows(snap.snapshotFileLocation());
+    List<TrackedFile> rootRows = readRootManifestRows(snap.snapshotFileLocation());
     assertThat(rootRows)
         .filteredOn(row -> row.contentType() == FileContent.DATA_MANIFEST)
         .as("spilled leaves surface as DATA_MANIFEST references in the root")
@@ -494,7 +543,7 @@ public class TestV4SnapshotProducer {
               .withPath("/path/to/data-mix-" + i + ".parquet")
               .withFileSizeInBytes(10)
               .withPartitionPath("data_bucket=" + i)
-              .withRecordCount(1)
+              .withMetrics(metrics(200 + i, "mix-" + i))
               .build());
     }
     AppendFiles append = table.newAppend();
@@ -507,12 +556,12 @@ public class TestV4SnapshotProducer {
     assertThat(snap.snapshotFileLocation()).isNotNull().endsWith(".parquet");
 
     // Root manifest carries 1 DATA_MANIFEST reference (the spilled leaf) + 2 DATA direct rows.
-    List<TrackedFileStruct> rootRows = readRootManifestRows(snap.snapshotFileLocation());
-    List<TrackedFileStruct> dataManifestRefs =
+    List<TrackedFile> rootRows = readRootManifestRows(snap.snapshotFileLocation());
+    List<TrackedFile> dataManifestRefs =
         rootRows.stream()
             .filter(r -> r.contentType() == FileContent.DATA_MANIFEST)
             .collect(Collectors.toList());
-    List<TrackedFileStruct> directDataRows =
+    List<TrackedFile> directDataRows =
         rootRows.stream()
             .filter(r -> r.contentType() == FileContent.DATA)
             .collect(Collectors.toList());
@@ -574,7 +623,7 @@ public class TestV4SnapshotProducer {
               .withPath("/path/to/data-p-" + i + ".parquet")
               .withFileSizeInBytes(10)
               .withPartitionPath("data_bucket=" + i)
-              .withRecordCount(1)
+              .withMetrics(metrics(300 + i, "p-" + i))
               .build());
     }
     AppendFiles parentAppend = table.newAppend();
@@ -589,7 +638,7 @@ public class TestV4SnapshotProducer {
             .withPath("/path/to/data-c-new.parquet")
             .withFileSizeInBytes(10)
             .withPartitionPath("data_bucket=8")
-            .withRecordCount(1)
+            .withMetrics(metrics(400, "c-new"))
             .build();
     DataFile parentDirectToDelete = parentFiles.get(5); // one of the two direct rows
     table.newOverwrite().deleteFile(parentDirectToDelete).addFile(childNewFile).commit();
@@ -614,12 +663,12 @@ public class TestV4SnapshotProducer {
 
     // Sanity: the retired direct-row file surfaces as a DELETED direct row on the child's root,
     // confirming Phase 4b routed the retirement through filterV4AdaptiveParentDirectRows.
-    List<TrackedFileStruct> childRootRows = readRootManifestRows(child.snapshotFileLocation());
+    List<TrackedFile> childRootRows = readRootManifestRows(child.snapshotFileLocation());
     assertThat(childRootRows)
         .filteredOn(
             r ->
                 r.contentType() == FileContent.DATA && r.tracking().status() == EntryStatus.DELETED)
-        .extracting(TrackedFileStruct::location)
+        .extracting(TrackedFile::location)
         .containsExactly(parentDirectToDelete.location());
   }
 
@@ -679,11 +728,250 @@ public class TestV4SnapshotProducer {
         MetricsConfig.from(table.properties(), SCHEMA, SortOrder.unsorted());
     Tracking tracking =
         new TrackingStruct(EntryStatus.ADDED, snapId, null, null, null, null, null, null);
+    // Strip DataFile-provided stats: the raw-inject helper path doesn't tolerate them (a separate
+    // concern from real appends). The injected tests here don't assert on stats anyway.
     return TrackedFileAdapters.forDataFile(
             TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE,
             SCHEMA,
             metricsConfig,
             unionPartitionType)
-        .wrap(file, tracking);
+        .wrap(file.copyWithoutStats(), tracking);
+  }
+
+  /**
+   * A {@code CommitFailedException} retry re-invokes {@code MergingSnapshotProducer.apply}, which
+   * re-runs {@link MergingSnapshotProducer#filterV4AdaptiveParentDirectRows} against the parent's
+   * promoted-root direct rows. Without the per-apply reset introduced alongside this test, each
+   * retry would re-append the retirement row to the accumulator's DELETED buffer, so a delete after
+   * three commit failures would emit four DELETED direct rows for the same file — corrupting the
+   * child snapshot's row set.
+   */
+  @Test
+  public void testDirectRowDeleteIsIdempotentOnCommitRetry() throws IOException {
+    // Snap 1: FILE_A and FILE_B land inline as direct rows on the promoted root.
+    table.newAppend().appendFile(FILE_A).appendFile(FILE_B).commit();
+
+    // Snap 2: retire FILE_A after three simulated commit failures.
+    table.ops().failCommits(3);
+    table.newDelete().deleteFile(FILE_A).commit();
+
+    Snapshot child = table.currentSnapshot();
+    List<TrackedFile> childRootRows = readRootManifestRows(child.snapshotFileLocation());
+    assertThat(childRootRows)
+        .filteredOn(
+            r ->
+                r.contentType() == FileContent.DATA && r.tracking().status() == EntryStatus.DELETED)
+        .as("Retirement must be idempotent across commit retries")
+        .extracting(TrackedFile::location)
+        .containsExactly(FILE_A.location());
+  }
+
+  /**
+   * The adaptive tree grows from one level to two across commits. A first small write keeps every
+   * file inline as a root direct row (1-level: no on-disk leaf). A later commit whose carried
+   * survivors plus newly-appended files cross {@code commit.manifest.target-size-bytes} pushes the
+   * combined live pool over the spill threshold, so it rolls an on-disk leaf and the child root
+   * references it (2-level). Exercises the carry-then-spill branch documented in {@link
+   * SnapshotProducer#runAdaptiveDrainAndPromote} ("roll into leaves uniformly when the combined
+   * live set is large").
+   */
+  @Test
+  public void testAdaptiveTreeGrowsFromOneLevelToTwoLevelsAcrossCommits() throws IOException {
+    // 200-byte seed against a 1000-byte target → the live pool rolls a leaf every 5 rows.
+    table.updateProperties().set(TableProperties.MANIFEST_TARGET_SIZE_BYTES, "1000").commit();
+
+    // Snap 1: two files stay inline as root direct rows — a 1-level tree, no on-disk leaf.
+    table.newAppend().appendFile(FILE_A).appendFile(FILE_B).commit();
+    Snapshot parent = table.currentSnapshot();
+    assertThat(realLeaves(parent))
+        .as("first small write is a 1-level tree: root direct rows only, no on-disk leaf")
+        .isEmpty();
+    assertThat(parent.dataManifests(table.io()))
+        .hasSize(1)
+        .allSatisfy(m -> assertThat(m.path()).isEqualTo(parent.snapshotFileLocation()));
+
+    // Snap 2: four more files. Carried survivors (2 EXISTING) + new (4 ADDED) = 6 live rows cross
+    // the 5-row target, so the combined live pool spills into an on-disk leaf: the tree grows to
+    // 2 levels.
+    List<DataFile> more = newDataFiles("grow", 2, 4);
+    AppendFiles append = table.newAppend();
+    more.forEach(append::appendFile);
+    append.commit();
+    Snapshot child = table.currentSnapshot();
+
+    assertThat(realLeaves(child))
+        .as("combined live set crosses the target, so the child is a 2-level tree")
+        .isNotEmpty();
+    assertThat(readRootManifestRows(child.snapshotFileLocation()))
+        .filteredOn(r -> r.contentType() == FileContent.DATA_MANIFEST)
+        .as("2-level tree: the root carries at least one leaf reference")
+        .isNotEmpty();
+
+    // Scan planning surfaces every live file across both surfaces (root direct rows + leaf).
+    List<String> expected = Lists.newArrayList(FILE_A.location(), FILE_B.location());
+    more.forEach(f -> expected.add(f.location()));
+    assertThat(planFileLocations()).containsExactlyInAnyOrderElementsOf(expected);
+  }
+
+  /**
+   * A first commit large enough to fully spill produces a 2-level tree whose root holds only leaf
+   * references and no direct rows. Ten files against a five-row leaf target roll exactly two full
+   * leaves with no sub-target remainder, so the promoted root carries zero DATA direct rows — the
+   * pure-leaf counterpart to {@link #testAdaptiveTreeMixedSpillAndDirectRows}, which always leaves
+   * a direct-row tail.
+   */
+  @Test
+  public void testAdaptiveTreeFirstCommitFullySpillsWithNoDirectRows() throws IOException {
+    table.updateProperties().set(TableProperties.MANIFEST_TARGET_SIZE_BYTES, "1000").commit();
+
+    List<DataFile> files = newDataFiles("pureleaf", 0, 10);
+    AppendFiles append = table.newAppend();
+    files.forEach(append::appendFile);
+    append.commit();
+    Snapshot snap = table.currentSnapshot();
+
+    List<TrackedFile> rootRows = readRootManifestRows(snap.snapshotFileLocation());
+    assertThat(rootRows)
+        .filteredOn(r -> r.contentType() == FileContent.DATA)
+        .as("an even multiple of the leaf target leaves no direct-row remainder")
+        .isEmpty();
+    assertThat(rootRows)
+        .filteredOn(r -> r.contentType() == FileContent.DATA_MANIFEST)
+        .as("first commit spills entirely into two on-disk leaves")
+        .hasSize(2)
+        .allSatisfy(r -> assertThat(r.tracking().status()).isEqualTo(EntryStatus.ADDED));
+
+    // No virtual root-direct-rows manifest is synthesized — every data manifest is a real leaf.
+    assertThat(snap.dataManifests(table.io()))
+        .hasSize(2)
+        .allSatisfy(m -> assertThat(m.path()).isNotEqualTo(snap.snapshotFileLocation()));
+
+    assertThat(planFileLocations())
+        .containsExactlyInAnyOrderElementsOf(
+            files.stream().map(DataFile::location).collect(Collectors.toList()));
+  }
+
+  /**
+   * Copy-on-write retirement of a data file that lives in an on-disk leaf rather than a root direct
+   * row. With a small target the parent's first commit spills five files into a leaf plus a
+   * direct-row tail; a child {@code newDelete} then retires one leaf-resident file. The leaf is
+   * unpacked and re-drained through the accumulator ({@link
+   * ManifestFilterManager#isV4AdaptiveMode}): the retired file becomes a DELETED entry, the
+   * survivors carry forward, and no delete manifest is written. Complements the direct-row
+   * retirements in {@link #testOverwriteWithMultipleParentDirectRowRetirements}, which only
+   * exercise the direct-row filter path.
+   */
+  @Test
+  public void testCopyOnWriteRetiresLeafResidentDataFile() throws IOException {
+    table.updateProperties().set(TableProperties.MANIFEST_TARGET_SIZE_BYTES, "1000").commit();
+
+    // Snap 1: six files → one on-disk leaf of five (buckets 0..4) + one direct-row tail (bucket 5).
+    List<DataFile> files = newDataFiles("cow", 0, 6);
+    AppendFiles append = table.newAppend();
+    files.forEach(append::appendFile);
+    append.commit();
+    Snapshot parent = table.currentSnapshot();
+
+    DataFile leafResident = files.get(2);
+    List<ManifestFile> parentLeaves = realLeaves(parent);
+    assertThat(parentLeaves).as("parent must have exactly one real on-disk leaf").hasSize(1);
+    assertThat(readLeafManifestEntries(parentLeaves.get(0)))
+        .as("the file to retire must be leaf-resident, not a root direct row")
+        .extracting(e -> e.file().location())
+        .contains(leafResident.location());
+
+    // Snap 2: copy-on-write delete of the leaf-resident file — no delete files involved.
+    table.newDelete().deleteFile(leafResident).commit();
+    Snapshot child = table.currentSnapshot();
+
+    assertThat(child.deleteManifests(table.io()))
+        .as("copy-on-write must not introduce delete manifests")
+        .isEmpty();
+
+    // The retired leaf-resident file surfaces as a DELETED direct row on the child root, proving
+    // the
+    // leaf was unpacked and routed through the accumulator (not the direct-row filter path).
+    assertThat(readRootManifestRows(child.snapshotFileLocation()))
+        .filteredOn(
+            r ->
+                r.contentType() == FileContent.DATA && r.tracking().status() == EntryStatus.DELETED)
+        .extracting(TrackedFile::location)
+        .containsExactly(leafResident.location());
+
+    // Scan planning surfaces exactly the survivors.
+    List<String> survivors =
+        files.stream()
+            .map(DataFile::location)
+            .filter(loc -> !loc.equals(leafResident.location()))
+            .collect(Collectors.toList());
+    assertThat(planFileLocations()).containsExactlyInAnyOrderElementsOf(survivors);
+  }
+
+  /**
+   * Unpartitioned v4 tables: the empty partition type maps to {@code UnknownType}, so no partition
+   * column (and no {@code _unpartitioned} placeholder) is written — the value is null on read.
+   * Component-level null-partition round-trips are covered by {@code TestV4ManifestReader}; this
+   * exercises the full commit path for both surfaces (a small write that stays a root direct row,
+   * and a spilled on-disk leaf) and confirms scan planning round-trips.
+   */
+  @Test
+  public void testUnpartitionedV4RoundTrips() throws IOException {
+    Schema schema =
+        new Schema(
+            required(3, "id", Types.IntegerType.get()),
+            required(4, "data", Types.StringType.get()));
+    TestTables.TestTable unpart =
+        TestTables.create(
+            new File(tableDir, "unpart"),
+            "unpart",
+            schema,
+            PartitionSpec.unpartitioned(),
+            SortOrder.unsorted(),
+            4);
+
+    DataFile file1 =
+        DataFiles.builder(PartitionSpec.unpartitioned())
+            .withPath("/path/to/u-1.parquet")
+            .withFileSizeInBytes(10)
+            .withMetrics(metrics(500, "u-1"))
+            .build();
+
+    // Small write → root direct row. The unpartitioned root manifest is readable with an
+    // empty-partition (UnknownType) schema, and the row decodes.
+    unpart.newAppend().appendFile(file1).commit();
+    Snapshot direct = unpart.currentSnapshot();
+
+    List<TrackedFile> rootRows = readRootManifestRows(direct.snapshotFileLocation());
+    assertThat(rootRows).hasSize(1);
+    assertThat(rootRows.get(0).contentType()).isEqualTo(FileContent.DATA);
+    assertThat(rootRows.get(0).location()).isEqualTo(file1.location());
+
+    try (CloseableIterable<FileScanTask> tasks = unpart.newScan().planFiles()) {
+      assertThat(Lists.newArrayList(tasks))
+          .extracting(t -> t.file().location())
+          .containsExactly(file1.location());
+    }
+
+    // Spill to an on-disk leaf (target=1) and confirm the unpartitioned leaf round-trips too.
+    unpart.updateProperties().set(TableProperties.MANIFEST_TARGET_SIZE_BYTES, "1").commit();
+    DataFile file2 =
+        DataFiles.builder(PartitionSpec.unpartitioned())
+            .withPath("/path/to/u-2.parquet")
+            .withFileSizeInBytes(10)
+            .withMetrics(metrics(501, "u-2"))
+            .build();
+    unpart.newAppend().appendFile(file2).commit();
+    Snapshot spilled = unpart.currentSnapshot();
+
+    assertThat(spilled.dataManifests(unpart.io()))
+        .filteredOn(m -> !m.path().equals(spilled.snapshotFileLocation()))
+        .as("target=1 spills unpartitioned rows into on-disk leaves")
+        .isNotEmpty();
+
+    try (CloseableIterable<FileScanTask> tasks = unpart.newScan().planFiles()) {
+      assertThat(Lists.newArrayList(tasks))
+          .extracting(t -> t.file().location())
+          .containsExactlyInAnyOrder(file1.location(), file2.location());
+    }
   }
 }

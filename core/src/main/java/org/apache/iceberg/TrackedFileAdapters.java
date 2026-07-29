@@ -604,6 +604,13 @@ class TrackedFileAdapters {
           "Reusable content-file wrapper does not support copyWithStats()");
     }
 
+    // Unlike copy()/copyWithStats(), a stats-free materialization has no per-column-stats work and
+    // is what buffering writers need to retain a row past this reusable wrapper's lifetime.
+    @Override
+    public TrackedFile copyWithoutStats() {
+      return TrackedFileStruct.materializeWithoutStats(this, partitionType);
+    }
+
     @Override
     public int size() {
       return TRACKED_FILE_FIELD_COUNT;

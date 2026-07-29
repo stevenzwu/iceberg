@@ -37,6 +37,22 @@ public interface AppendFiles extends SnapshotUpdate<AppendFiles> {
   AppendFiles appendFile(DataFile file);
 
   /**
+   * Append a {@link DataFile} to the table with a colocated deletion vector attached in the same
+   * commit (born-with-DV). Supported on v4+ tables; the DV is written inline on the data manifest
+   * entry so it never lands in a separate delete manifest.
+   *
+   * @param file a data file
+   * @param deletionVector a {@link DeleteFile} with {@link FileContent#POSITION_DELETES} content,
+   *     {@link FileFormat#PUFFIN} format, and {@link DeleteFile#referencedDataFile()} equal to
+   *     {@code file.location()}
+   * @return this for method chaining
+   */
+  default AppendFiles appendFile(DataFile file, DeleteFile deletionVector) {
+    throw new UnsupportedOperationException(
+        getClass().getName() + " does not implement appendFile(DataFile, DeleteFile)");
+  }
+
+  /**
    * Append a {@link ManifestFile} to the table.
    *
    * <p>The manifest must contain only appended files. All files in the manifest will be appended to

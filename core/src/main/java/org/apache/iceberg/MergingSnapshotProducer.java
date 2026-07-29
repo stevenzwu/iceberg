@@ -120,17 +120,17 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
   private final Set<String> dvReplacedManifestPaths = Sets.newHashSet();
   // data file paths whose DVs were collapsed into data manifests (not written as delete manifests)
   private final Set<String> collapsedDVPaths = Sets.newHashSet();
+  // credit collapsed DVs to snapshot summary as added / removed delete files so v4 born-with-DV and
+  // REPLACED/MODIFIED commits report parity with v3 standalone DV writes.
+  private final SnapshotSummary.Builder collapsedDVAddedSummary = SnapshotSummary.builder();
+  private final SnapshotSummary.Builder collapsedDVRemovedSummary = SnapshotSummary.builder();
+
   private boolean hasDVRewrittenManifests = false;
   // map of data file path → DV for data files being born with a DV in this commit
   private Map<String, DeleteFile> bornWithDVByPath = ImmutableMap.of();
   // merged DV per referenced data file path — populated by prepareDVRewrittenManifests, reused by
   // collapseDVsForDirectRows so both DV-collapse pathways share a single merge pass.
   private Map<String, DeleteFile> mergedDVByPath = ImmutableMap.of();
-  // credit collapsed DVs to snapshot summary as added / removed delete files so v4 born-with-DV and
-  // REPLACED/MODIFIED commits report parity with v3 standalone DV writes.
-  private final SnapshotSummary.Builder collapsedDVAddedSummary = SnapshotSummary.builder();
-  private final SnapshotSummary.Builder collapsedDVRemovedSummary = SnapshotSummary.builder();
-
   private boolean caseSensitive = true;
 
   MergingSnapshotProducer(String tableName, TableOperations ops) {
@@ -1049,6 +1049,12 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
   @Override
   public List<ManifestFile> apply(TableMetadata base, Snapshot snapshot) {
     validateDeleteFilesForVersion(base.formatVersion());
+    // Reset v4 retirement inputs so a CommitFailedException retry does not accumulate duplicate
+    // routed rows: filterV4AdaptiveParentDirectRows and collapseDVsForDirectRows below both append
+    // unconditionally on each apply pass. resetV4PerApplyBuffers is a fast no-op on pre-v4 tables
+    // (empty directDeletedFiles set + default resetV4AdaptiveState).
+    filterManager.resetV4PerApplyBuffers();
+    deleteFilterManager.resetV4PerApplyBuffers();
     filterV4AdaptiveParentDirectRows(base, snapshot);
 
     // Virtual manifests over the parent's promoted-root direct rows are surfaced by
@@ -1404,7 +1410,11 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
    */
   private List<ManifestFile> prepareDVRewrittenManifests(
       TableMetadata base, List<ManifestFile> filteredDataManifests) {
-    if (hasDVRewrittenManifests && !cachedDVRewrittenManifests.isEmpty()) {
+    if (hasDVRewrittenManifests) {
+      // Retry reset. Guarding this on cachedDVRewrittenManifests.isEmpty() would skip the reset
+      // when every DV was handled via direct-row collapse (no leaf rewrite), leaving
+      // collapsedDVPaths / summary state populated from the prior attempt; the next attempt would
+      // then double-count summary counters and skip re-collapsing DVs.
       cachedDVRewrittenManifests.forEach(m -> deleteFile(m.path()));
       cachedDVRewrittenManifests.clear();
       dvReplacedManifestPaths.clear();
@@ -1604,7 +1614,7 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
       Set<String> affectedInThisManifest) {
     // Drop non-live entries (DELETED rows from the snapshot that deleted the file, and
     // REPLACED rows from a prior commit that updated a DV — both project to non-live via
-    // V4ManifestReader.toManifestStatus). They have already served their purpose in the
+    // V4ManifestEntryProjector.toManifestStatus). They have already served their purpose in the
     // snapshot that produced them; subsequent leaf rewrites omit them per spec semantics
     // for DELETED (and by analogy for REPLACED, which is not-live for the same reason).
     if (!entry.isLive()) {
@@ -1807,42 +1817,19 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
    * before re-entering this method, so state is reset.
    */
   private void collapseDVsForDirectRows(TableMetadata base, Snapshot parentSnapshot) {
-    if (parentSnapshot == null
-        || parentSnapshot.formatVersion()
-            < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
+    if (!isEligibleForDirectRowDVCollapse(parentSnapshot)) {
       return;
     }
-    List<Map.Entry<String, DeleteFile>> uncollapsed = Lists.newArrayList();
-    for (Map.Entry<String, DeleteFile> entry : mergedDVByPath.entrySet()) {
-      if (!collapsedDVPaths.contains(entry.getKey())) {
-        uncollapsed.add(entry);
-      }
-    }
+
+    List<Map.Entry<String, DeleteFile>> uncollapsed = uncollapsedDVs();
     if (uncollapsed.isEmpty()) {
       return;
     }
 
     Map<Integer, PartitionSpec> specsById = base.specsById();
-    List<TrackedFile> parentDirectRows =
-        RootManifestReader.readDirectRows(
-            ops().io().newInputFile(parentSnapshot.snapshotFileLocation()), specsById);
-    if (parentDirectRows.isEmpty()) {
+    Map<String, TrackedFile> parentDirectByPath = liveDirectRowsByPath(parentSnapshot, specsById);
+    if (parentDirectByPath.isEmpty()) {
       return;
-    }
-
-    // Keep only the live row per path — ADDED (first append), MODIFIED (prior DV rewrite), or
-    // EXISTING (carried forward from an ancestor). REPLACED / DELETED rows are historical
-    // retirements that must not be picked up as the DV's source; picking them would misattribute
-    // the DV's origin snapshot and misalign the REPLACED/MODIFIED pair against the actual live
-    // file.
-    Map<String, TrackedFile> parentDirectByPath = Maps.newHashMap();
-    for (TrackedFile row : parentDirectRows) {
-      EntryStatus status = row.tracking().status();
-      if (status == EntryStatus.ADDED
-          || status == EntryStatus.MODIFIED
-          || status == EntryStatus.EXISTING) {
-        parentDirectByPath.put(row.location(), row);
-      }
     }
 
     Schema tableSchema = SnapshotUtil.schemaFor(base, targetBranch());
@@ -1913,6 +1900,44 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
         collapsedDVRemovedSummary.deletedFile(spec(dv.specId()), toDVDeleteFile(file, priorDv));
       }
     }
+  }
+
+  private static boolean isEligibleForDirectRowDVCollapse(Snapshot parentSnapshot) {
+    return parentSnapshot != null
+        && parentSnapshot.formatVersion()
+            >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE;
+  }
+
+  private List<Map.Entry<String, DeleteFile>> uncollapsedDVs() {
+    List<Map.Entry<String, DeleteFile>> uncollapsed = Lists.newArrayList();
+    for (Map.Entry<String, DeleteFile> entry : mergedDVByPath.entrySet()) {
+      if (!collapsedDVPaths.contains(entry.getKey())) {
+        uncollapsed.add(entry);
+      }
+    }
+    return uncollapsed;
+  }
+
+  // Indexes the parent's promoted-root direct rows by path, keeping only the live row per path —
+  // ADDED (first append), MODIFIED (prior DV rewrite), or EXISTING (carried forward from an
+  // ancestor). REPLACED / DELETED rows are historical retirements that must not be picked up as
+  // the DV's source; picking them would misattribute the DV's origin snapshot and misalign the
+  // REPLACED/MODIFIED pair against the actual live file.
+  private Map<String, TrackedFile> liveDirectRowsByPath(
+      Snapshot parentSnapshot, Map<Integer, PartitionSpec> specsById) {
+    List<TrackedFile> parentDirectRows =
+        RootManifestReader.readDirectRows(
+            ops().io().newInputFile(parentSnapshot.snapshotFileLocation()), specsById);
+    Map<String, TrackedFile> byPath = Maps.newHashMap();
+    for (TrackedFile row : parentDirectRows) {
+      EntryStatus status = row.tracking().status();
+      if (status == EntryStatus.ADDED
+          || status == EntryStatus.MODIFIED
+          || status == EntryStatus.EXISTING) {
+        byPath.put(row.location(), row);
+      }
+    }
+    return byPath;
   }
 
   private class DataFileFilterManager extends ManifestFilterManager<DataFile> {

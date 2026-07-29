@@ -83,20 +83,7 @@ public class SnapshotParser {
       generator.writeEndObject();
     }
 
-    String snapshotFile = snapshot.snapshotFileLocation();
-    if (snapshotFile != null
-        && snapshot.formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
-      generator.writeStringField(ROOT_MANIFEST, snapshotFile);
-    } else if (snapshotFile != null) {
-      // write just the location. manifests should not be embedded in JSON along with a list
-      generator.writeStringField(MANIFEST_LIST, snapshotFile);
-    } else {
-      // embed the manifest list in the JSON, v1 only
-      JsonUtil.writeStringArray(
-          MANIFESTS,
-          Iterables.transform(snapshot.allManifests(DUMMY_FILE_IO), ManifestFile::path),
-          generator);
-    }
+    writeSnapshotFileLocation(snapshot, generator);
 
     // schema ID might be null for snapshots written by old writers
     if (snapshot.schemaId() != null) {
@@ -114,6 +101,26 @@ public class SnapshotParser {
     JsonUtil.writeStringFieldIfPresent(KEY_ID, snapshot.keyId(), generator);
 
     generator.writeEndObject();
+  }
+
+  private static void writeSnapshotFileLocation(Snapshot snapshot, JsonGenerator generator)
+      throws IOException {
+    String snapshotFile = snapshot.snapshotFileLocation();
+    if (snapshotFile == null) {
+      // embed the manifest list in the JSON, v1 only
+      JsonUtil.writeStringArray(
+          MANIFESTS,
+          Iterables.transform(snapshot.allManifests(DUMMY_FILE_IO), ManifestFile::path),
+          generator);
+      return;
+    }
+
+    // write just the location. manifests should not be embedded in JSON along with a list
+    String fieldName =
+        snapshot.formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE
+            ? ROOT_MANIFEST
+            : MANIFEST_LIST;
+    generator.writeStringField(fieldName, snapshotFile);
   }
 
   public static String toJson(Snapshot snapshot) {

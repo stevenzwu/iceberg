@@ -96,9 +96,9 @@ public class TestV4CommitAccumulator {
         new V4CommitAccumulator(leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY);
     // 2 rows per pool × 100 = 200 < 500 → no pool spills; live pool's single writer becomes root.
     for (int i = 0; i < 2; i++) {
-      acc.add(dataRow(i, EntryStatus.ADDED), true);
-      acc.add(dataRow(i, EntryStatus.DELETED), false);
-      acc.add(dataRow(i, EntryStatus.REPLACED), false);
+      acc.add(dataRow(i, EntryStatus.ADDED));
+      acc.add(dataRow(i, EntryStatus.DELETED));
+      acc.add(dataRow(i, EntryStatus.REPLACED));
     }
     SnapshotFile root = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
 
@@ -115,7 +115,7 @@ public class TestV4CommitAccumulator {
     // 6 live rows × 100 = 600 projected → rolls at 5 (1 leaf), 1 row remains in the next writer,
     // which the promote-to-root call promotes.
     for (int i = 0; i < 6; i++) {
-      acc.add(dataRow(i, EntryStatus.ADDED), true);
+      acc.add(dataRow(i, EntryStatus.ADDED));
     }
     SnapshotFile root = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
 
@@ -131,8 +131,8 @@ public class TestV4CommitAccumulator {
         new V4CommitAccumulator(leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY);
     // Each retirement pool: 6 rows × 100 = 600 → spills 1 leaf + 1 tail per pool.
     for (int i = 0; i < 6; i++) {
-      acc.add(dataRow(i, EntryStatus.DELETED), false);
-      acc.add(dataRow(i, EntryStatus.REPLACED), false);
+      acc.add(dataRow(i, EntryStatus.DELETED));
+      acc.add(dataRow(i, EntryStatus.REPLACED));
     }
     SnapshotFile root = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
 
@@ -161,7 +161,7 @@ public class TestV4CommitAccumulator {
     // Add one live row so the live pool has content; then attach two external leaf refs. The
     // external refs land in the promoted root via addManifestEntry, distinct from
     // accumulator-produced leaves.
-    acc.add(dataRow(0, EntryStatus.ADDED), true);
+    acc.add(dataRow(0, EntryStatus.ADDED));
     ManifestFile external1 =
         new GenericManifestFile(
             "s3://bucket/external-1.parquet",
@@ -206,8 +206,8 @@ public class TestV4CommitAccumulator {
             4,
             null,
             null);
-    acc.addExternalLeafReference(external1, EntryStatus.ADDED);
-    acc.addExternalLeafReference(external2, EntryStatus.EXISTING);
+    acc.addExternalLeafManifestEntry(external1, EntryStatus.ADDED);
+    acc.addExternalLeafManifestEntry(external2, EntryStatus.EXISTING);
 
     SnapshotFile root = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
 
@@ -241,7 +241,7 @@ public class TestV4CommitAccumulator {
             null,
             ImmutableList.of(1));
 
-    assertThatThrownBy(() -> acc.add(eqDelete, true))
+    assertThatThrownBy(() -> acc.add(eqDelete))
         .isInstanceOf(UnsupportedOperationException.class)
         .hasMessageContaining("Delete pools");
   }
@@ -250,7 +250,7 @@ public class TestV4CommitAccumulator {
   public void testCloseIsIdempotent() {
     V4CommitAccumulator acc =
         new V4CommitAccumulator(leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY);
-    acc.add(dataRow(0, EntryStatus.ADDED), true);
+    acc.add(dataRow(0, EntryStatus.ADDED));
     SnapshotFile firstRoot = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
     SnapshotFile secondRoot = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
     assertThat(secondRoot).isSameAs(firstRoot);
@@ -274,12 +274,12 @@ public class TestV4CommitAccumulator {
     V4CommitAccumulator acc =
         new V4CommitAccumulator(leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY);
     acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
-    assertThatThrownBy(() -> acc.add(dataRow(0, EntryStatus.ADDED), true))
+    assertThatThrownBy(() -> acc.add(dataRow(0, EntryStatus.ADDED)))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("closed");
     assertThatThrownBy(
             () ->
-                acc.addExternalLeafReference(
+                acc.addExternalLeafManifestEntry(
                     new GenericManifestFile(
                         "x",
                         1L,

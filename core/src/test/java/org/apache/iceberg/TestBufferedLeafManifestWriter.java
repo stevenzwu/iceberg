@@ -212,4 +212,47 @@ public class TestBufferedLeafManifestWriter {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("avgBytesPerEntry must be positive");
   }
+
+  @Test
+  public void testAddMaterializesIndependentStatsFreeCopies() {
+    // A single reusable write wrapper, re-pointed per row (the documented forDataFile usage). If
+    // the
+    // buffer retained the wrapper itself, both buffered rows would alias the last-wrapped file.
+    // add() must materialize an independent, stats-free copy of each row.
+    TrackedFileAdapters.DataTrackedFile wrapper =
+        TrackedFileAdapters.forDataFile(
+            TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE,
+            SCHEMA,
+            MetricsConfig.from(ImmutableMap.of(), SCHEMA, SortOrder.unsorted()),
+            UNION_PARTITION_TYPE);
+    Tracking tracking = TrackingBuilder.added(SNAPSHOT_ID).build();
+
+    BufferedLeafManifestWriter writer =
+        new BufferedLeafManifestWriter(leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY);
+    writer.add(wrapper.wrap(dataFile("/path/to/a.parquet", 0), tracking));
+    writer.add(wrapper.wrap(dataFile("/path/to/b.parquet", 1), tracking));
+
+    List<TrackedFile> tail = writer.closeAndTakeTail();
+
+    assertThat(tail)
+        .as("buffered rows must not alias the reused wrapper")
+        .extracting(TrackedFile::location)
+        .containsExactly("/path/to/a.parquet", "/path/to/b.parquet");
+    assertThat(tail)
+        .allSatisfy(
+            row -> {
+              assertThat(row).isNotSameAs(wrapper);
+              assertThat(row.contentStats()).as("retired rows drop column stats").isNull();
+              assertThat(row.partition()).as("partition tuple is materialized").isNotNull();
+            });
+  }
+
+  private DataFile dataFile(String path, int ordinal) {
+    return DataFiles.builder(SPEC)
+        .withPath(path)
+        .withFileSizeInBytes(1024L)
+        .withPartitionPath("data_bucket=" + (ordinal % 16))
+        .withRecordCount(10L)
+        .build();
+  }
 }

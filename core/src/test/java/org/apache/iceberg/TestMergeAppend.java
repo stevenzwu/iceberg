@@ -1638,4 +1638,17 @@ public class TestMergeAppend extends TestBase {
         .containsEntry(SnapshotSummary.REPLACED_MANIFESTS_COUNT, "0")
         .containsEntry(SnapshotSummary.KEPT_MANIFESTS_COUNT, "0");
   }
+
+  @TestTemplate
+  public void testBornWithDVRejectedOnPreV4Table() {
+    assumeThat(formatVersion).isLessThan(TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE);
+    assertThatThrownBy(() -> table.newAppend().appendFile(FILE_A, FILE_A_DV))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage(
+            "Cannot use born-with-DV appendFile for format version "
+                + formatVersion
+                + " (minimum: "
+                + TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE
+                + ")");
+  }
 }

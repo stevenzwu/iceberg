@@ -2778,4 +2778,17 @@ public class TestRowDelta extends TestBase {
     return TestTables.create(
         encryptedTableDir, tableName, SCHEMA, SPEC, SortOrder.unsorted(), formatVersion, ops);
   }
+
+  @TestTemplate
+  public void testBornWithDVRejectedOnPreV4Table() {
+    assumeThat(formatVersion).isLessThan(TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE);
+    assertThatThrownBy(() -> table.newRowDelta().addRows(FILE_A, FILE_A_DV))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage(
+            "Cannot use born-with-DV addRows for format version "
+                + formatVersion
+                + " (minimum: "
+                + TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE
+                + ")");
+  }
 }

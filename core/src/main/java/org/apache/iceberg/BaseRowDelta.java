@@ -25,6 +25,7 @@ import org.apache.iceberg.expressions.Expression;
 import org.apache.iceberg.expressions.Expressions;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.util.CharSequenceSet;
+import org.apache.iceberg.util.ContentFileUtil;
 import org.apache.iceberg.util.DataFileSet;
 import org.apache.iceberg.util.SnapshotUtil;
 
@@ -62,6 +63,31 @@ public class BaseRowDelta extends MergingSnapshotProducer<RowDelta> implements R
   @Override
   public RowDelta addRows(DataFile inserts) {
     add(inserts);
+    return this;
+  }
+
+  @Override
+  public RowDelta addRows(DataFile inserts, DeleteFile deletionVector) {
+    Preconditions.checkArgument(inserts != null, "Data file cannot be null");
+    Preconditions.checkArgument(deletionVector != null, "Deletion vector cannot be null");
+    int formatVersion = ops().current().formatVersion();
+    Preconditions.checkArgument(
+        formatVersion >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE,
+        "Cannot use born-with-DV addRows for format version %s (minimum: %s)",
+        formatVersion,
+        TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE);
+    Preconditions.checkArgument(
+        ContentFileUtil.isDV(deletionVector),
+        "Deletion vector must be a puffin position-delete file: %s",
+        deletionVector.location());
+    Preconditions.checkArgument(
+        inserts.location().equals(deletionVector.referencedDataFile()),
+        "Deletion vector %s must reference data file %s (got %s)",
+        deletionVector.location(),
+        inserts.location(),
+        deletionVector.referencedDataFile());
+    add(inserts);
+    add(deletionVector);
     return this;
   }
 

@@ -23,6 +23,7 @@ import java.util.Map;
 import org.apache.iceberg.encryption.EncryptedOutputFile;
 import org.apache.iceberg.io.FileAppender;
 import org.apache.iceberg.io.OutputFile;
+import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.types.Types;
 
 /**
@@ -243,7 +244,7 @@ class V4LeafWriter<F extends ContentFile<F>> extends ManifestWriter<F> {
    */
   @Override
   void addWithDV(DataFile addedFile, DeletionVector dv) {
-    org.apache.iceberg.relocated.com.google.common.base.Preconditions.checkState(
+    Preconditions.checkState(
         dataAdapter != null, "addWithDV is only supported for data leaf manifests");
     Long snapshotId = writerSnapshotId();
     Tracking tracking =
@@ -267,7 +268,7 @@ class V4LeafWriter<F extends ContentFile<F>> extends ManifestWriter<F> {
   @Override
   @SuppressWarnings("unchecked")
   void replacedEntry(ManifestEntry<F> entry, DeletionVector priorDv) {
-    org.apache.iceberg.relocated.com.google.common.base.Preconditions.checkState(
+    Preconditions.checkState(
         dataAdapter != null, "replacedEntry is only supported for data leaf manifests");
     Long snapshotId = writerSnapshotId() != null ? writerSnapshotId() : 0L;
     Tracking tracking =
@@ -287,7 +288,7 @@ class V4LeafWriter<F extends ContentFile<F>> extends ManifestWriter<F> {
   @Override
   @SuppressWarnings("unchecked")
   void modifiedEntry(ManifestEntry<F> entry, DeletionVector dv) {
-    org.apache.iceberg.relocated.com.google.common.base.Preconditions.checkState(
+    Preconditions.checkState(
         dataAdapter != null, "modifiedEntry is only supported for data leaf manifests");
     Long dvSnapshotId = writerSnapshotId() != null ? writerSnapshotId() : 0L;
     Tracking tracking =
@@ -308,6 +309,7 @@ class V4LeafWriter<F extends ContentFile<F>> extends ManifestWriter<F> {
     if (dataAdapter != null) {
       return dataAdapter.wrap((DataFile) file, tracking);
     }
+
     return deleteAdapter.wrap((DeleteFile) file, tracking);
   }
 

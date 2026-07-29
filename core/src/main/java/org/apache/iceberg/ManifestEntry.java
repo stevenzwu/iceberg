@@ -134,6 +134,11 @@ interface ManifestEntry<F extends ContentFile<F>> {
   /** Returns a file. */
   F file();
 
+  /** Returns the colocated deletion vector attached to this entry, or null if none. */
+  default DeleteFile deletionVector() {
+    return null;
+  }
+
   ManifestEntry<F> copy();
 
   ManifestEntry<F> copyWithoutStats();

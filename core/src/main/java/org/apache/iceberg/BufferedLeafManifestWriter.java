@@ -33,6 +33,10 @@ import org.apache.iceberg.relocated.com.google.common.collect.Lists;
  * ContentFile<F>}, and — unlike {@link StreamingLeafManifestWriter} — it holds rows in memory so
  * its sub-target tail can be handed back to the caller rather than promoted to root.
  *
+ * <p>Because rows are held in memory, {@link #add} retains a stats-free materialized copy rather
+ * than the caller's (reusable) row. This writer buffers only retired (DELETED/REPLACED) entries,
+ * which are non-live and never read for column bounds, so dropping stats is safe.
+ *
  * <p>Buffers rows using a caller-provided {@code avgBytesPerEntry} seed. When the estimated
  * buffered bytes cross {@code targetSizeBytes}, the buffered rows are flushed through a fresh
  * {@link LeafManifestWriter} and closed as a leaf {@link ManifestFile}. Rows added after a flush
@@ -83,7 +87,11 @@ class BufferedLeafManifestWriter implements Closeable {
    */
   void add(TrackedFile row) {
     Preconditions.checkState(!closed, "Cannot add to a closed BufferedLeafManifestWriter");
-    buffer.add(row);
+    // Retain an independent copy, not the caller's row: write-direction wrappers are reusable
+    // (re-pointed per row), so buffering the wrapper itself would alias every buffered row to the
+    // last add. Stats are dropped because this writer only buffers retired (DELETED/REPLACED)
+    // entries, which are non-live and never read for column bounds.
+    buffer.add(row.copyWithoutStats());
     if (estimatedBufferedBytes() >= targetSizeBytes) {
       flushBufferAsLeaf();
     }
@@ -103,18 +111,30 @@ class BufferedLeafManifestWriter implements Closeable {
     if (buffer.isEmpty()) {
       return;
     }
+
     LeafManifestWriter writer = writerSupplier.get();
+    boolean threw = true;
     try {
       for (TrackedFile row : buffer) {
         writer.add(row);
       }
+
       writer.close();
       manifestFiles.add(writer.toManifestFile());
+      buffer.clear();
+      threw = false;
     } catch (IOException e) {
       throw new UncheckedIOException(
           "Failed to flush BufferedLeafManifestWriter buffer to leaf", e);
+    } finally {
+      if (threw) {
+        try {
+          writer.close();
+        } catch (Exception suppressed) {
+          // best-effort cleanup — swallow to avoid masking the original failure
+        }
+      }
     }
-    buffer.clear();
   }
 
   /**
@@ -126,6 +146,7 @@ class BufferedLeafManifestWriter implements Closeable {
     if (closed) {
       return;
     }
+
     flushBufferAsLeaf();
     this.closed = true;
   }
