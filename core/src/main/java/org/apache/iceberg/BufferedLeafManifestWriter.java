@@ -28,27 +28,29 @@ import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 
 /**
- * A rolling writer over {@link TrackedFile} rows, parallel to {@link RollingManifestWriter} but
- * bounded on {@link TrackedFile} rather than {@code ContentFile<F>}.
+ * A buffering roller over {@link TrackedFile} rows for pools that do not own the root manifest.
+ * Parallel to {@link RollingManifestWriter} but bounded on {@link TrackedFile} rather than {@code
+ * ContentFile<F>}, and — unlike {@link StreamingLeafManifestWriter} — it holds rows in memory so
+ * its sub-target tail can be handed back to the caller rather than promoted to root.
  *
- * <p>Buffers rows in memory using a caller-provided {@code avgBytesPerEntry} seed. When the
- * estimated buffered bytes cross {@code targetSizeBytes}, the buffered rows are flushed to a fresh
- * {@link TrackedFileWriter} and closed as a leaf {@link ManifestFile}. Rows added after a flush
+ * <p>Buffers rows using a caller-provided {@code avgBytesPerEntry} seed. When the estimated
+ * buffered bytes cross {@code targetSizeBytes}, the buffered rows are flushed through a fresh
+ * {@link LeafManifestWriter} and closed as a leaf {@link ManifestFile}. Rows added after a flush
  * accumulate in a new buffer.
  *
  * <p>Two close modes:
  *
  * <ul>
  *   <li>{@link #close()} flushes any remaining buffer as a final leaf (may be smaller than {@code
- *       targetSizeBytes}). Use this in Phase-2 producer paths where every row must land in a leaf.
+ *       targetSizeBytes}).
  *   <li>{@link #closeAndTakeTail()} closes without flushing the remaining buffer, returning the
- *       tail rows to the caller. The adaptive assembler (Phase 3) uses this so a sub-target tail
- *       becomes direct rows in the root manifest rather than a small leaf.
+ *       tail rows to the caller so a sub-target tail becomes direct rows in the root manifest
+ *       rather than a small leaf (the adaptive small-write optimization for retirement pools).
  * </ul>
  */
-class RollingTrackedFileWriter implements Closeable {
+class BufferedLeafManifestWriter implements Closeable {
 
-  private final Supplier<TrackedFileWriter> writerSupplier;
+  private final Supplier<LeafManifestWriter> writerSupplier;
   private final long targetSizeBytes;
   private final long avgBytesPerEntry;
   private final List<TrackedFile> buffer;
@@ -57,15 +59,17 @@ class RollingTrackedFileWriter implements Closeable {
   private boolean tailTaken = false;
 
   /**
-   * @param writerSupplier supplies a fresh {@link TrackedFileWriter} for each spilled leaf
+   * @param writerSupplier supplies a fresh {@link LeafManifestWriter} for each spilled leaf
    * @param targetSizeBytes byte threshold above which the buffer flushes as a leaf
    * @param avgBytesPerEntry seed used to estimate buffered bytes ({@code count *
    *     avgBytesPerEntry}); must be positive
    */
-  RollingTrackedFileWriter(
-      Supplier<TrackedFileWriter> writerSupplier, long targetSizeBytes, long avgBytesPerEntry) {
-    Preconditions.checkArgument(targetSizeBytes > 0, "targetSizeBytes must be positive: %s", targetSizeBytes);
-    Preconditions.checkArgument(avgBytesPerEntry > 0, "avgBytesPerEntry must be positive: %s", avgBytesPerEntry);
+  BufferedLeafManifestWriter(
+      Supplier<LeafManifestWriter> writerSupplier, long targetSizeBytes, long avgBytesPerEntry) {
+    Preconditions.checkArgument(
+        targetSizeBytes > 0, "targetSizeBytes must be positive: %s", targetSizeBytes);
+    Preconditions.checkArgument(
+        avgBytesPerEntry > 0, "avgBytesPerEntry must be positive: %s", avgBytesPerEntry);
     this.writerSupplier = writerSupplier;
     this.targetSizeBytes = targetSizeBytes;
     this.avgBytesPerEntry = avgBytesPerEntry;
@@ -78,7 +82,7 @@ class RollingTrackedFileWriter implements Closeable {
    * the add, the buffer is flushed as a leaf.
    */
   void add(TrackedFile row) {
-    Preconditions.checkState(!closed, "Cannot add to a closed RollingTrackedFileWriter");
+    Preconditions.checkState(!closed, "Cannot add to a closed BufferedLeafManifestWriter");
     buffer.add(row);
     if (estimatedBufferedBytes() >= targetSizeBytes) {
       flushBufferAsLeaf();
@@ -99,7 +103,7 @@ class RollingTrackedFileWriter implements Closeable {
     if (buffer.isEmpty()) {
       return;
     }
-    TrackedFileWriter writer = writerSupplier.get();
+    LeafManifestWriter writer = writerSupplier.get();
     try {
       for (TrackedFile row : buffer) {
         writer.add(row);
@@ -107,7 +111,8 @@ class RollingTrackedFileWriter implements Closeable {
       writer.close();
       manifestFiles.add(writer.toManifestFile());
     } catch (IOException e) {
-      throw new UncheckedIOException("Failed to flush RollingTrackedFileWriter buffer to leaf", e);
+      throw new UncheckedIOException(
+          "Failed to flush BufferedLeafManifestWriter buffer to leaf", e);
     }
     buffer.clear();
   }
@@ -131,7 +136,7 @@ class RollingTrackedFileWriter implements Closeable {
    * #close()}; the two paths are mutually exclusive.
    */
   List<TrackedFile> closeAndTakeTail() {
-    Preconditions.checkState(!closed, "RollingTrackedFileWriter already closed");
+    Preconditions.checkState(!closed, "BufferedLeafManifestWriter already closed");
     Preconditions.checkState(!tailTaken, "Tail already taken");
     List<TrackedFile> tail = ImmutableList.copyOf(buffer);
     buffer.clear();

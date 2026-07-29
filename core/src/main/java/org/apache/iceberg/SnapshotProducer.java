@@ -26,8 +26,6 @@ import static org.apache.iceberg.TableProperties.COMMIT_NUM_RETRIES;
 import static org.apache.iceberg.TableProperties.COMMIT_NUM_RETRIES_DEFAULT;
 import static org.apache.iceberg.TableProperties.COMMIT_TOTAL_RETRY_TIME_MS;
 import static org.apache.iceberg.TableProperties.COMMIT_TOTAL_RETRY_TIME_MS_DEFAULT;
-import static org.apache.iceberg.TableProperties.MANIFEST_ADAPTIVE_TREE_ENABLED;
-import static org.apache.iceberg.TableProperties.MANIFEST_ADAPTIVE_TREE_ENABLED_DEFAULT;
 import static org.apache.iceberg.TableProperties.MANIFEST_TARGET_SIZE_BYTES;
 import static org.apache.iceberg.TableProperties.MANIFEST_TARGET_SIZE_BYTES_DEFAULT;
 import static org.apache.iceberg.TableProperties.SNAPSHOT_ID_INHERITANCE_ENABLED;
@@ -121,7 +119,6 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
   private final AtomicInteger attempt = new AtomicInteger(0);
   private final List<String> manifestLists = Lists.newArrayList();
   private final long targetManifestSizeBytes;
-  private final boolean adaptiveTreeEnabled;
   private final List<TrackedFile> v4AdaptiveNewLiveDataRows = Lists.newArrayList();
   private final List<TrackedFile> v4AdaptiveRetirementRows = Lists.newArrayList();
   private long v4DrainedDirectRowRecords = 0L;
@@ -167,10 +164,6 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
             .propertyAsBoolean(
                 SNAPSHOT_ID_INHERITANCE_ENABLED, SNAPSHOT_ID_INHERITANCE_ENABLED_DEFAULT);
     this.canInheritSnapshotId = ops.current().formatVersion() > 1 || snapshotIdInheritanceEnabled;
-    this.adaptiveTreeEnabled =
-        ops.current()
-            .propertyAsBoolean(
-                MANIFEST_ADAPTIVE_TREE_ENABLED, MANIFEST_ADAPTIVE_TREE_ENABLED_DEFAULT);
   }
 
   protected abstract ThisT self();
@@ -445,46 +438,19 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
 
     long currentSnapshotId = snapshotId();
 
-    String rootManifestLocation;
-    String rootEncryptionKeyId;
-    if (adaptiveTreeEnabled) {
-      // Adaptive path: accumulator streams live-pool rows through V4StreamingWriter, promotes the
-      // last-open writer to root with all leaf-manifest-entries appended.
-      ManifestFile promotedRoot =
-          runAdaptiveDrainAndPromote(manifestFiles, currentSnapshotId, sequenceNumber);
-      rootManifestLocation = promotedRoot.path();
-      rootEncryptionKeyId = null; // encryption for promoted-leaf root is future work
-      manifestLists.add(rootManifestLocation);
-    } else {
-      // Legacy path: open a separate root writer and stream leaf-manifest-entries into it.
-      OutputFile rootManifest = rootManifestPath();
-      manifestLists.add(rootManifest.location());
-      TrackedFileWriter writer =
-          RootManifests.write(
-              formatVersion,
-              rootManifest,
-              ops.encryption(),
-              currentSnapshotId,
-              parentSnapshotId,
-              sequenceNumber,
-              base.nextRowId(),
-              base.schema(),
-              base.specsById(),
-              TrackedFileWriter.ROOT_CONTENT_STATS_TYPE);
-      try (writer) {
-        for (ManifestFile manifest : manifestFiles) {
-          EntryStatus status =
-              manifest.snapshotId() != null && manifest.snapshotId() == currentSnapshotId
-                  ? EntryStatus.ADDED
-                  : EntryStatus.EXISTING;
-          writer.add(manifest, status);
-        }
-      } catch (IOException e) {
-        throw new RuntimeIOException(e, "Failed to write root manifest file");
-      }
-      rootManifestLocation = rootManifest.location();
-      rootEncryptionKeyId = writer.toRootManifestFile().encryptionKeyID();
-    }
+    // Adaptive path is the only v4 write path: the accumulator streams live-pool rows through a
+    // StreamingLeafManifestWriter, promotes the last-open writer to root with all
+    // leaf-manifest-entries appended. Small commits stay inline as root direct rows; larger commits
+    // spill leaves.
+    ManifestListFile promotedRoot =
+        runAdaptiveDrainAndPromote(
+            manifestFiles, parentSnapshot, currentSnapshotId, sequenceNumber);
+    String rootManifestLocation = promotedRoot.location();
+    // Null for promoted-leaf roots (their appender carries no manifest-list encryption key — future
+    // work); the value flows through the ManifestListFile from
+    // RootManifestWriter#toRootManifestFile.
+    String rootEncryptionKeyId = promotedRoot.encryptionKeyID();
+    manifestLists.add(rootManifestLocation);
 
     Map<String, String> summary = summary();
     String operation = operation();
@@ -532,11 +498,11 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
    * leaves (from {@code manifestFiles}) are added as manifest-reference rows in the promoted root
    * alongside the accumulator's own rolled leaves.
    *
-   * <p>The v4 leaves the accumulator produces (via {@link V4StreamingWriter}) share the table-wide
-   * union partition type ({@link Partitioning#unionPartitionTypes}); each row's partition tuple
-   * projects into the union at wrap time. The current default spec is passed to the leaf writer
-   * factory because {@link TrackedFileWriter#forDataLeaf} only uses it for schema derivation and
-   * specId on the leaf's manifest header — the on-disk partition type is the union.
+   * <p>The v4 leaves the accumulator produces (via {@link StreamingLeafManifestWriter}) share the
+   * table-wide union partition type ({@link Partitioning#unionPartitionTypes}); each row's
+   * partition tuple projects into the union at wrap time. The current default spec is passed to the
+   * leaf writer factory because {@link LeafManifestWriter#forData} only uses it for schema
+   * derivation and specId on the leaf's manifest header — the on-disk partition type is the union.
    *
    * <p>Every live-pool row's record count contributes to {@link #v4DrainedDirectRowRecords}, which
    * applyV4 folds into the snapshot's added-rows total. The counter covers both rows that end up as
@@ -550,28 +516,40 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
    * root as direct rows and spilled leaves flow in as leaf-manifest-entry refs. Eq-delete pools are
    * still Phase 6 work.
    */
-  private ManifestFile runAdaptiveDrainAndPromote(
-      ManifestFile[] externalManifests, long currentSnapshotId, long sequenceNumber) {
+  private ManifestListFile runAdaptiveDrainAndPromote(
+      ManifestFile[] externalManifests,
+      Snapshot parentSnapshot,
+      long currentSnapshotId,
+      long sequenceNumber) {
     TableMetadata current = ops.current();
     Types.StructType unionPartitionType =
         Partitioning.unionPartitionTypes(current.specsById().values());
     PartitionSpec defaultSpec = current.spec();
     long snapId = snapshotId();
-    Supplier<TrackedFileWriter> leafWriterFactory =
+    Supplier<LeafManifestWriter> leafWriterFactory =
         () ->
-            TrackedFileWriter.forDataLeaf(
+            LeafManifestWriter.forData(
                 defaultSpec,
                 unionPartitionType,
                 newManifestOutputFile(),
                 snapId,
                 null,
                 manifestWriterProps);
+
     V4CommitAccumulator accumulator =
         new V4CommitAccumulator(
-            leafWriterFactory,
-            targetManifestSizeBytes,
-            DEFAULT_AVG_BYTES_PER_ENTRY_SEED,
-            List.of());
+            leafWriterFactory, targetManifestSizeBytes, DEFAULT_AVG_BYTES_PER_ENTRY_SEED);
+
+    // Phase 4c: carry the parent snapshot's direct data rows into the child's promoted root as
+    // EXISTING live rows. Feeding them through the live pool (instead of force-appending them as
+    // direct rows) lets them roll into leaves uniformly when the combined live set is large;
+    // without
+    // carrying them at all, small-write adaptive commits chain into data loss — the parent's direct
+    // rows are referenced from no leaf manifest, so snapshot.allManifests() misses them. They are
+    // EXISTING, so they do not contribute to v4DrainedDirectRowRecords.
+    for (TrackedFile row : readParentDirectRowsAsExisting(parentSnapshot)) {
+      accumulator.add(row, true);
+    }
 
     for (TrackedFile row : v4AdaptiveNewLiveDataRows) {
       accumulator.add(row, true);
@@ -600,9 +578,80 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
       accumulator.addExternalLeafReference(external, status);
     }
 
-    TrackedFileWriter.RootState refState =
-        TrackedFileWriter.refOnlyState(snapId, sequenceNumber, base.nextRowId());
-    return accumulator.close(refState);
+    return accumulator.close(snapId, sequenceNumber, base.nextRowId());
+  }
+
+  /**
+   * Reads {@code parentSnapshot}'s direct data rows from its root manifest and rewrites each row's
+   * tracking status to {@link EntryStatus#EXISTING} (preserving snapshot-id, sequence numbers,
+   * first-row-id, and DV snapshot-id) so the child snapshot's promoted root carries them forward as
+   * inline references to the same underlying data files.
+   *
+   * <p>Returns empty for a null parent, a parent that pre-dates v4, or a parent whose root has no
+   * direct rows (a pure-reference parent). Costs one Parquet read of the parent's root manifest per
+   * commit; a future slice can cache this on the parent Snapshot.
+   */
+  private List<TrackedFile> readParentDirectRowsAsExisting(Snapshot parentSnapshot) {
+    if (parentSnapshot == null || parentSnapshot.rootManifestLocation() == null) {
+      return java.util.Collections.emptyList();
+    }
+    TableMetadata current = ops.current();
+    Map<Integer, PartitionSpec> specsById = current.specsById();
+    List<TrackedFile> raw =
+        RootManifestReader.readDirectRows(
+            ops.io().newInputFile(parentSnapshot.rootManifestLocation()), specsById);
+    if (raw.isEmpty()) {
+      return java.util.Collections.emptyList();
+    }
+
+    Types.StructType unionPartitionType = Partitioning.unionPartitionTypes(specsById.values());
+    MetricsConfig metricsConfig = MetricsConfig.from(current.properties(), current.schema(), null);
+
+    // Phase 4b: filter-manager may have already routed a subset of parent's direct rows into the
+    // retirement channel as DELETED. Skip those here so they are not also carried into the child's
+    // promoted root as EXISTING — that would resurrect files the current commit is retiring.
+    Set<String> retiredPaths = Sets.newHashSet();
+    for (TrackedFile r : v4AdaptiveRetirementRows) {
+      retiredPaths.add(r.location());
+    }
+
+    // Direct rows written as ADDED with null dataSequenceNumber (FastAppend's inject-inherit
+    // pattern) come back from disk with null seq/fileSeq. Resolve those against the parent's
+    // snapshot sequence number when rewriting to EXISTING — the parent's seq is what the reader
+    // would have inherited from the commit that produced these rows.
+    long parentSeq = parentSnapshot.sequenceNumber();
+    List<TrackedFile> carried = Lists.newArrayListWithCapacity(raw.size());
+    for (TrackedFile row : raw) {
+      if (retiredPaths.contains(row.location())) {
+        continue;
+      }
+      DataFile file = TrackedFileAdapters.asDataFile(row, specsById);
+      Tracking src = row.tracking();
+      long resolvedDataSeq =
+          src.dataSequenceNumber() != null ? src.dataSequenceNumber() : parentSeq;
+      Long resolvedFileSeq =
+          src.fileSequenceNumber() != null ? src.fileSequenceNumber() : parentSeq;
+      Tracking newTracking =
+          new TrackingStruct(
+              EntryStatus.EXISTING,
+              src.snapshotId(),
+              resolvedDataSeq,
+              resolvedFileSeq,
+              src.dvSnapshotId(),
+              src.firstRowId(),
+              null,
+              null);
+      // Fresh adapter per row so the buffered TrackedFile retains distinct state (the accumulator
+      // holds row references in memory; a reusable wrapper shared across rows corrupts the list).
+      TrackedFileAdapters.DataTrackedFile adapter =
+          TrackedFileAdapters.forDataFile(
+              TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE,
+              current.schema(),
+              metricsConfig,
+              unionPartitionType);
+      carried.add(adapter.wrap(file, newTracking));
+    }
+    return carried;
   }
 
   /**
@@ -664,11 +713,6 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
     v4AdaptiveRetirementRows.clear();
   }
 
-  /** Returns whether the adaptive manifest-tree flag is enabled for this commit. */
-  protected boolean adaptiveTreeEnabled() {
-    return adaptiveTreeEnabled;
-  }
-
   /**
    * Converts the given {@link DataFile}s into {@link TrackedFile} rows and routes them into the v4
    * adaptive-tree live-data channel. Discards any live rows from a prior {@code apply()} attempt
@@ -697,13 +741,11 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
       Map<String, DeleteFile> bornWithDVByPath) {
     clearV4AdaptiveNewLiveInputs();
     TableMetadata current = ops.current();
-    // Match the leaf writer's on-disk partition schema: leaf writers project the union type
-    // through emptyPartitionPlaceholderIfNeeded (unpartitioned tables use the 1-field placeholder),
-    // so the adapter must too — otherwise a downstream reader projecting the placeholder against
-    // a 0-field row runs off the StructProjection positionMap with ArrayIndexOutOfBoundsException.
+    // The adapter's partition projection must use the same union type the leaf writers use, so the
+    // written row and the on-disk schema agree. An empty union (unpartitioned) maps to UnknownType
+    // via TrackedFile.schema — the partition column is omitted and read back as null.
     Types.StructType unionPartitionType =
-        TrackedFileWriter.emptyPartitionPlaceholderIfNeeded(
-            Partitioning.unionPartitionTypes(current.specsById().values()));
+        Partitioning.unionPartitionTypes(current.specsById().values());
     MetricsConfig metricsConfig = MetricsConfig.from(current.properties(), current.schema(), null);
     long snapId = snapshotId();
     boolean hasDvs = bornWithDVByPath != null && !bornWithDVByPath.isEmpty();

@@ -592,6 +592,11 @@ public class TestMetadataTableFilters extends TestBase {
   }
 
   private boolean manifestHasPartition(ManifestFile mf, int partValue) {
+    // v4 virtual manifests over root direct rows carry no partition summaries; per-file partitions
+    // travel on the file itself, so treat the virtual manifest as always matching.
+    if (mf.partitions() == null) {
+      return true;
+    }
     int lower =
         Conversions.fromByteBuffer(Types.IntegerType.get(), mf.partitions().get(0).lowerBound());
     int upper =

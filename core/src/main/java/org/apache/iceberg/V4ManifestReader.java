@@ -46,9 +46,9 @@ import org.apache.iceberg.util.StructProjection;
  * Reader that reads a v4+ manifest file as {@link TrackedFile}s.
  *
  * <p>The same reader also exposes commit-oriented views over the underlying {@code content_entry}
- * rows via {@link #forData} and {@link #forDelete}: legacy {@link ManifestEntry entries},
- * colocated deletion vectors, data-file and DV changes, and raw rows. The scan Builder path and
- * the commit-side factories are independent — the constructor state each populates is disjoint.
+ * rows via {@link #forData} and {@link #forDelete}: legacy {@link ManifestEntry entries}, colocated
+ * deletion vectors, data-file and DV changes, and raw rows. The scan Builder path and the
+ * commit-side factories are independent — the constructor state each populates is disjoint.
  */
 class V4ManifestReader extends CloseableGroup implements CloseableIterable<TrackedFile> {
   static final int SUPPORTED_FORMAT_VERSION = 4;
@@ -112,8 +112,7 @@ class V4ManifestReader extends CloseableGroup implements CloseableIterable<Track
       int specId,
       Map<Integer, PartitionSpec> specsById,
       InheritableMetadata inheritableMetadata) {
-    return new V4ManifestReader(
-        file, ManifestContent.DATA, specId, specsById, inheritableMetadata);
+    return new V4ManifestReader(file, ManifestContent.DATA, specId, specsById, inheritableMetadata);
   }
 
   /** Opens a content_entry reader for a delete manifest (v4+ leaf). */
@@ -232,6 +231,27 @@ class V4ManifestReader extends CloseableGroup implements CloseableIterable<Track
     return readEntries();
   }
 
+  /**
+   * Returns direct DATA rows from a v4+ promoted root manifest as data manifest entries. Filters
+   * co-resident {@code DATA_MANIFEST} and {@code DELETE_MANIFEST} rows out before applying {@link
+   * #toManifestEntry}, so the caller sees only inline data-file entries. Preserves v4 tracking
+   * status directly (ADDED / EXISTING / DELETED) — no collapsing.
+   *
+   * <p>Used by {@link ManifestFiles#read} when the caller passes a {@link
+   * RootDirectRowsManifestFile} produced by {@link RootManifestReader#read}.
+   */
+  @SuppressWarnings({"unchecked", "rawtypes"})
+  CloseableIterable<ManifestEntry<DataFile>> directDataEntriesFromRoot() {
+    Preconditions.checkArgument(
+        contentType == ManifestContent.DATA,
+        "Cannot read direct data entries from a delete manifest: %s",
+        file.location());
+    CloseableIterable<TrackedFileStruct> dataRows =
+        CloseableIterable.filter(buildRows(), row -> row.contentType() == FileContent.DATA);
+    return (CloseableIterable<ManifestEntry<DataFile>>)
+        (CloseableIterable) CloseableIterable.transform(dataRows, this::toManifestEntry);
+  }
+
   /** Returns all entries (including deleted) as delete manifest entries. */
   CloseableIterable<ManifestEntry<DeleteFile>> deleteEntries() {
     Preconditions.checkArgument(
@@ -274,8 +294,8 @@ class V4ManifestReader extends CloseableGroup implements CloseableIterable<Track
 
   /**
    * Returns colocated DV changes encoded as {@code (status, DeleteFile)} pairs, suitable for
-   * computing per-snapshot delete-file deltas: ADDED DVs (ADDED and MODIFIED rows) and DELETED
-   * DVs (REPLACED rows). EXISTING rows and rows without a DV are skipped.
+   * computing per-snapshot delete-file deltas: ADDED DVs (ADDED and MODIFIED rows) and DELETED DVs
+   * (REPLACED rows). EXISTING rows and rows without a DV are skipped.
    */
   CloseableIterable<Pair<ManifestEntry.Status, DeleteFile>> colocatedDVChanges() {
     Preconditions.checkArgument(
@@ -296,8 +316,8 @@ class V4ManifestReader extends CloseableGroup implements CloseableIterable<Track
   }
 
   /**
-   * Builds the raw content_entry row iterable for this manifest and registers it for close.
-   * Shared by every commit-side view so the {@code content_entry} decode happens in one place.
+   * Builds the raw content_entry row iterable for this manifest and registers it for close. Shared
+   * by every commit-side view so the {@code content_entry} decode happens in one place.
    */
   private CloseableIterable<TrackedFileStruct> buildRows() {
     PartitionSpec defaultSpec = resolveDefaultSpec();

@@ -697,7 +697,7 @@ public class TestManifestWriterVersions {
       // The root manifest persists each leaf's format_version (the manifest-list schema does not),
       // so round-tripping through it keeps the reconstructed reference at format_version=4 and
       // exercises the real v4 sequence-number inheritance path.
-      try (TrackedFileWriter writer =
+      try (RootManifestWriter writer =
           RootManifests.write(
               formatVersion,
               manifestList,
@@ -708,7 +708,7 @@ public class TestManifestWriterVersions {
               FIRST_ROW_ID,
               SCHEMA,
               SPECS_BY_ID)) {
-        writer.add(manifest);
+        writer.addManifestEntry(manifest, EntryStatus.ADDED);
       }
 
       return manifestList.toInputFile();

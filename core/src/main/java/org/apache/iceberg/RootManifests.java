@@ -48,7 +48,7 @@ class RootManifests {
   }
 
   /**
-   * Creates a new {@link TrackedFileWriter} for a v4+ root manifest with the null-stats
+   * Creates a new {@link RootManifestWriter} for a v4+ root manifest with the null-stats
    * placeholder content_stats type — appropriate for a root that carries only manifest reference
    * rows. Callers that intend to append direct content-file rows (Phase 3 adaptive assembler) use
    * the overload that accepts an explicit {@code contentStatsType}.
@@ -68,7 +68,7 @@ class RootManifests {
    *     root manifest partition schema matches the leaf manifests
    * @throws IllegalArgumentException if {@code formatVersion < 4}
    */
-  static TrackedFileWriter write(
+  static RootManifestWriter write(
       int formatVersion,
       OutputFile outputFile,
       EncryptionManager encryptionManager,
@@ -92,15 +92,15 @@ class RootManifests {
   }
 
   /**
-   * Creates a new {@link TrackedFileWriter} that writes stats-bearing content_entry rows on a v4+
+   * Creates a new {@link RootManifestWriter} that writes stats-bearing content_entry rows on a v4+
    * root manifest. Behaves like the placeholder-stats variant but encodes the given {@code
-   * content_stats} type, so direct data-file rows appended via {@link TrackedFileWriter#add} carry
+   * content_stats} type, so direct data-file rows appended via {@link RootManifestWriter#add} carry
    * real column statistics.
    *
    * @param contentStatsType the content_stats struct type the writer encodes; must match the stats
-   *     struct on every row passed to {@link TrackedFileWriter#add}
+   *     struct on every row passed to {@link RootManifestWriter#add}
    */
-  static TrackedFileWriter write(
+  static RootManifestWriter write(
       int formatVersion,
       OutputFile outputFile,
       EncryptionManager encryptionManager,
@@ -119,7 +119,7 @@ class RootManifests {
     Preconditions.checkArgument(
         specsById != null && !specsById.isEmpty(), "Invalid specs map: null or empty");
     Types.StructType partitionType = Partitioning.unionPartitionTypes(specsById.values());
-    return TrackedFileWriter.forRoot(
+    return RootManifestWriter.create(
         outputFile,
         encryptionManager,
         snapshotId,

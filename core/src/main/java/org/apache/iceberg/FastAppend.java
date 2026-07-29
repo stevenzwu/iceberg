@@ -163,7 +163,16 @@ class FastAppend extends SnapshotProducer<AppendFiles> implements AppendFiles {
     Iterables.addAll(manifests, appendManifestsWithMetadata);
 
     if (snapshot != null) {
-      manifests.addAll(snapshot.allManifests(ops().io()));
+      for (ManifestFile parentManifest : snapshot.allManifests(ops().io())) {
+        // v4 adaptive: skip the virtual manifest over the parent's root direct rows.
+        // runAdaptiveDrainAndPromote carries those rows forward via readParentDirectRowsAsExisting;
+        // surfacing them here as an external leaf ref would double-count and also fail metadata
+        // enrichment (a virtual manifest has no on-disk leaf shape).
+        if (parentManifest instanceof RootDirectRowsManifestFile) {
+          continue;
+        }
+        manifests.add(parentManifest);
+      }
     }
 
     summaryBuilder.merge(buildManifestCountSummary(manifests, 0));
@@ -211,8 +220,7 @@ class FastAppend extends SnapshotProducer<AppendFiles> implements AppendFiles {
     // channel instead of writing per-spec leaf manifests up front. The commit's applyV4 drain
     // decides whether each row lands as a root direct row (below the per-leaf target) or spills
     // into a leaf-manifest-entry — no small-write leaf is materialized for below-target commits.
-    if (adaptiveTreeEnabled()
-        && ops().current().formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE
+    if (ops().current().formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE
         && !newDataFilesBySpec.isEmpty()) {
       injectV4AdaptiveDataFiles(
           Iterables.concat(newDataFilesBySpec.values()),

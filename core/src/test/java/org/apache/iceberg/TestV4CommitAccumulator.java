@@ -35,21 +35,21 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Unit tests for {@link V4CommitAccumulator}: covers pool routing via
- * {@link V4RootManifestAssembler#classify}, live-pool streaming through {@link V4StreamingWriter},
- * buffered retirement pools via {@link V4WritePool}, and the promote-to-root close protocol.
+ * Unit tests for {@link V4CommitAccumulator}: covers pool routing via {@link
+ * V4RootManifestAssembler#classify}, live-pool streaming through {@link
+ * StreamingLeafManifestWriter}, buffered retirement pools via {@link BufferedLeafManifestWriter},
+ * and the promote-to-root close protocol.
  *
- * <p>Row-level content verification (which specific rows end up as direct rows in the promoted
- * root vs which become leaf-manifest-entries) is covered by the end-to-end
- * {@code TestV4SnapshotProducer} injection tests — those read the resulting root Parquet file.
- * Here we focus on structural behavior: leaf counts, factory invocation, promotion invariants.
+ * <p>Row-level content verification (which specific rows end up as direct rows in the promoted root
+ * vs which become leaf-manifest-entries) is covered by the end-to-end {@code
+ * TestV4SnapshotProducer} injection tests — those read the resulting root Parquet file. Here we
+ * focus on structural behavior: leaf counts, factory invocation, promotion invariants.
  */
 public class TestV4CommitAccumulator {
 
   private static final Schema SCHEMA =
       new Schema(
-          required(1, "id", Types.IntegerType.get()),
-          required(2, "data", Types.StringType.get()));
+          required(1, "id", Types.IntegerType.get()), required(2, "data", Types.StringType.get()));
   private static final PartitionSpec SPEC =
       PartitionSpec.builderFor(SCHEMA).bucket("data", 16).build();
   private static final Types.StructType UNION_PARTITION_TYPE = SPEC.partitionType();
@@ -62,27 +62,26 @@ public class TestV4CommitAccumulator {
 
   private final AtomicInteger leafCounter = new AtomicInteger();
 
-  private Supplier<TrackedFileWriter> leafFactory() {
+  private Supplier<LeafManifestWriter> leafFactory() {
     return () -> {
       OutputFile out =
           Files.localOutput(
               new File(tempDir, "leaf-" + leafCounter.getAndIncrement() + ".parquet"));
       EncryptedOutputFile encrypted = EncryptedFiles.plainAsEncryptedOutput(out);
-      return TrackedFileWriter.forDataLeaf(
+      return LeafManifestWriter.forData(
           SPEC, UNION_PARTITION_TYPE, encrypted, SNAPSHOT_ID, null, ImmutableMap.of());
     };
   }
 
-  private TrackedFile dataRow(int i, EntryStatus status) {
+  private TrackedFile dataRow(int ordinal, EntryStatus status) {
     DataFile dataFile =
         DataFiles.builder(SPEC)
-            .withPath("/path/to/data-" + status + "-" + i + ".parquet")
+            .withPath("/path/to/data-" + status + "-" + ordinal + ".parquet")
             .withFileSizeInBytes(1024L)
-            .withPartitionPath("data_bucket=" + (i % 16))
+            .withPartitionPath("data_bucket=" + (ordinal % 16))
             .withRecordCount(10L)
             .build();
-    Tracking tracking =
-        new TrackingStruct(status, SNAPSHOT_ID, 3L, 3L, null, null, null, null);
+    Tracking tracking = new TrackingStruct(status, SNAPSHOT_ID, 3L, 3L, null, null, null, null);
     return TrackedFileAdapters.forDataFile(
             TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE,
             SCHEMA,
@@ -91,22 +90,17 @@ public class TestV4CommitAccumulator {
         .wrap(dataFile, tracking);
   }
 
-  private TrackedFileWriter.RootState refState() {
-    return TrackedFileWriter.refOnlyState(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
-  }
-
   @Test
   public void testAllPoolsUnderTargetInline() {
     V4CommitAccumulator acc =
-        new V4CommitAccumulator(
-            leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY, ImmutableList.of());
+        new V4CommitAccumulator(leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY);
     // 2 rows per pool × 100 = 200 < 500 → no pool spills; live pool's single writer becomes root.
     for (int i = 0; i < 2; i++) {
       acc.add(dataRow(i, EntryStatus.ADDED), true);
       acc.add(dataRow(i, EntryStatus.DELETED), false);
       acc.add(dataRow(i, EntryStatus.REPLACED), false);
     }
-    ManifestFile root = acc.close(refState());
+    ManifestListFile root = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
 
     assertThat(root).isNotNull();
     assertThat(acc.leafManifests()).as("no rolled/spilled leaves").isEmpty();
@@ -117,14 +111,13 @@ public class TestV4CommitAccumulator {
   @Test
   public void testLivePoolStreamsAndRolls() {
     V4CommitAccumulator acc =
-        new V4CommitAccumulator(
-            leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY, ImmutableList.of());
+        new V4CommitAccumulator(leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY);
     // 6 live rows × 100 = 600 projected → rolls at 5 (1 leaf), 1 row remains in the next writer,
     // which the promote-to-root call promotes.
     for (int i = 0; i < 6; i++) {
       acc.add(dataRow(i, EntryStatus.ADDED), true);
     }
-    ManifestFile root = acc.close(refState());
+    ManifestListFile root = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
 
     assertThat(root).isNotNull();
     assertThat(acc.leafManifests()).as("one rolled leaf").hasSize(1);
@@ -135,14 +128,13 @@ public class TestV4CommitAccumulator {
   @Test
   public void testRetirementPoolsSpillIntoLeafRefs() {
     V4CommitAccumulator acc =
-        new V4CommitAccumulator(
-            leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY, ImmutableList.of());
+        new V4CommitAccumulator(leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY);
     // Each retirement pool: 6 rows × 100 = 600 → spills 1 leaf + 1 tail per pool.
     for (int i = 0; i < 6; i++) {
       acc.add(dataRow(i, EntryStatus.DELETED), false);
       acc.add(dataRow(i, EntryStatus.REPLACED), false);
     }
-    ManifestFile root = acc.close(refState());
+    ManifestListFile root = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
 
     assertThat(root).isNotNull();
     assertThat(acc.leafManifests()).as("2 retirement leaves").hasSize(2);
@@ -153,9 +145,8 @@ public class TestV4CommitAccumulator {
   @Test
   public void testEmptyAccumulatorPromotes() {
     V4CommitAccumulator acc =
-        new V4CommitAccumulator(
-            leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY, ImmutableList.of());
-    ManifestFile root = acc.close(refState());
+        new V4CommitAccumulator(leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY);
+    ManifestListFile root = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
 
     // No adds at all: promoteCurrentToRoot opens one writer just to hold zero rows + close as root.
     assertThat(root).isNotNull();
@@ -166,8 +157,7 @@ public class TestV4CommitAccumulator {
   @Test
   public void testExternalLeafReferencesAreCarriedIntoRoot() {
     V4CommitAccumulator acc =
-        new V4CommitAccumulator(
-            leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY, ImmutableList.of());
+        new V4CommitAccumulator(leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY);
     // Add one live row so the live pool has content; then attach two external leaf refs. The
     // external refs land in the promoted root via addManifestEntry, distinct from
     // accumulator-produced leaves.
@@ -219,7 +209,7 @@ public class TestV4CommitAccumulator {
     acc.addExternalLeafReference(external1, EntryStatus.ADDED);
     acc.addExternalLeafReference(external2, EntryStatus.EXISTING);
 
-    ManifestFile root = acc.close(refState());
+    ManifestListFile root = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
 
     assertThat(root).isNotNull();
     // Externals aren't in leafManifests(); they're refs, not accumulator-owned files.
@@ -229,8 +219,7 @@ public class TestV4CommitAccumulator {
   @Test
   public void testEqualityDeleteRowIsRejected() {
     V4CommitAccumulator acc =
-        new V4CommitAccumulator(
-            leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY, ImmutableList.of());
+        new V4CommitAccumulator(leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY);
     Tracking tracking =
         new TrackingStruct(EntryStatus.ADDED, SNAPSHOT_ID, 1L, 1L, null, null, null, null);
     TrackedFile eqDelete =
@@ -260,11 +249,10 @@ public class TestV4CommitAccumulator {
   @Test
   public void testCloseIsIdempotent() {
     V4CommitAccumulator acc =
-        new V4CommitAccumulator(
-            leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY, ImmutableList.of());
+        new V4CommitAccumulator(leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY);
     acc.add(dataRow(0, EntryStatus.ADDED), true);
-    ManifestFile firstRoot = acc.close(refState());
-    ManifestFile secondRoot = acc.close(refState());
+    ManifestListFile firstRoot = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
+    ManifestListFile secondRoot = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
     assertThat(secondRoot).isSameAs(firstRoot);
     assertThat(acc.promotedRoot()).isSameAs(firstRoot);
   }
@@ -272,48 +260,56 @@ public class TestV4CommitAccumulator {
   @Test
   public void testGettersRejectPreClose() {
     V4CommitAccumulator acc =
-        new V4CommitAccumulator(
-            leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY, ImmutableList.of());
-    assertThatThrownBy(acc::promotedRoot).isInstanceOf(IllegalStateException.class);
-    assertThatThrownBy(acc::leafManifests).isInstanceOf(IllegalStateException.class);
+        new V4CommitAccumulator(leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY);
+    assertThatThrownBy(acc::promotedRoot)
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("not closed");
+    assertThatThrownBy(acc::leafManifests)
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("not closed");
   }
 
   @Test
   public void testAddAfterCloseIsRejected() {
     V4CommitAccumulator acc =
-        new V4CommitAccumulator(
-            leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY, ImmutableList.of());
-    acc.close(refState());
+        new V4CommitAccumulator(leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY);
+    acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
     assertThatThrownBy(() -> acc.add(dataRow(0, EntryStatus.ADDED), true))
-        .isInstanceOf(IllegalStateException.class);
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("closed");
     assertThatThrownBy(
             () ->
                 acc.addExternalLeafReference(
-                    new GenericManifestFile("x", 1L, 0, ManifestContent.DATA, 1L, 1L, 1L, null,
-                        null, 0, 0L, 0, 0L, 0, 0L, null, 0L, 4, null, null),
+                    new GenericManifestFile(
+                        "x",
+                        1L,
+                        0,
+                        ManifestContent.DATA,
+                        1L,
+                        1L,
+                        1L,
+                        null,
+                        null,
+                        0,
+                        0L,
+                        0,
+                        0L,
+                        0,
+                        0L,
+                        null,
+                        0L,
+                        4,
+                        null,
+                        null),
                     EntryStatus.ADDED))
-        .isInstanceOf(IllegalStateException.class);
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("closed");
   }
 
   @Test
   public void testConstructorRejectsInvalidArgs() {
-    assertThatThrownBy(
-            () ->
-                new V4CommitAccumulator(
-                    null, TARGET_BYTES, AVG_BYTES_PER_ENTRY, ImmutableList.of()))
-        .isInstanceOf(IllegalArgumentException.class);
-    assertThatThrownBy(
-            () ->
-                new V4CommitAccumulator(
-                    leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY, null))
-        .isInstanceOf(IllegalArgumentException.class);
-  }
-
-  @Test
-  public void testCloseRejectsNullRefState() {
-    V4CommitAccumulator acc =
-        new V4CommitAccumulator(
-            leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY, ImmutableList.of());
-    assertThatThrownBy(() -> acc.close(null)).isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> new V4CommitAccumulator(null, TARGET_BYTES, AVG_BYTES_PER_ENTRY))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("data leaf writer factory");
   }
 }

@@ -18,6 +18,8 @@
  */
 package org.apache.iceberg;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.function.Supplier;
 import org.apache.iceberg.V4RootManifestAssembler.PoolKind;
@@ -27,22 +29,23 @@ import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.util.Pair;
 
 /**
- * Routes {@link TrackedFile} rows into per-(content-type, lifecycle) pools during a commit and,
- * at {@link #close(TrackedFileWriter.RootState)}, promotes the live-data pool's last streamed
- * writer to the snapshot's root manifest — carrying every rolled leaf's manifest-reference row
- * plus each retirement pool's sub-target tail as direct rows.
+ * Routes {@link TrackedFile} rows into per-(content-type, lifecycle) pools during a commit and, at
+ * {@link #close(long, long, Long)}, promotes the live-data pool's last streamed writer to the
+ * snapshot's root manifest — folding each retirement pool's sub-target tail in as direct rows and
+ * every rolled/spilled leaf in as a leaf-manifest-entry.
  *
- * <p>Live-data rows stream through a {@link V4StreamingWriter} that opens a fresh
- * {@link TrackedFileWriter} on the first {@link #add}, rolls it at each projection crossing, and
- * keeps the last-open writer available at close time so promotion can append leaf-refs + extras
- * into it — one fewer file per commit than a separate root writer approach.
+ * <p>Live-data rows stream through a {@link StreamingLeafManifestWriter} that opens a fresh {@link
+ * LeafManifestWriter} on the first {@link #add}, rolls it at each projection crossing, and hands
+ * its last-open writer to {@link #close} as an open {@link RootManifestWriter} — one fewer file per
+ * commit than a separate root writer approach. Parent-snapshot carry-over live rows are fed through
+ * {@link #add} like any other live row, so they roll and inline uniformly.
  *
- * <p>Retirement pools (DELETED / REPLACED) and the eq-delete placeholders keep the buffered
- * semantics of {@link V4WritePool}: rows accumulate in memory until the projected size crosses
- * the target, at which point they spill through {@link RollingTrackedFileWriter}. Retirement is
- * typically small so this preserves the "no writer opened" small-write optimization for those
- * pools — their tails flow into the promoted root as direct rows, their leaves flow in as
- * leaf-manifest-entry refs.
+ * <p>Retirement rows (DELETED / REPLACED) buffer through a {@link BufferedLeafManifestWriter}: rows
+ * accumulate in memory until the projected size crosses the target, then spill as leaves.
+ * Retirement is typically small, so this preserves the "no writer opened" small-write optimization
+ * for those pools — their sub-target tails flow into the promoted root as direct rows, their
+ * spilled leaves as leaf-manifest-entry refs. Equality-delete pools are Phase 6 work; {@link #add}
+ * rejects them today.
  *
  * <p>Callers hand external leaf references (imported manifests, DV-carrying manifests,
  * parent-snapshot carry-overs) via {@link #addExternalLeafReference}; they land in the promoted
@@ -50,66 +53,47 @@ import org.apache.iceberg.util.Pair;
  */
 class V4CommitAccumulator {
 
-  private final Iterable<TrackedFile> priorRootLiveLeafEntries;
-
-  private final V4StreamingWriter dataLive;
-  private final V4WritePool dataDeletedRetirement;
-  private final V4WritePool dataReplacedRetirement;
-
-  // Placeholders for delete pools (Phase 6 owns eq-delete writes; see class doc).
-  private final V4WritePool deletesLive;
-  private final V4WritePool deletesDeletedRetirement;
+  private final StreamingLeafManifestWriter dataLive;
+  private final BufferedLeafManifestWriter dataDeletedRetirement;
+  private final BufferedLeafManifestWriter dataReplacedRetirement;
 
   private final List<Pair<ManifestFile, EntryStatus>> externalLeafRefs = Lists.newArrayList();
 
   private boolean closed = false;
-  private ManifestFile promotedRoot;
+  private ManifestListFile promotedRoot;
 
   /**
-   * @param dataLeafWriterFactory supplies a fresh {@link TrackedFileWriter} on each roll (live
-   *     pool) and each spill (retirement pools); the same factory backs all three data pools
-   *     since a data leaf is a data leaf regardless of source pool
+   * @param dataLeafWriterFactory supplies a fresh {@link LeafManifestWriter} on each roll (live
+   *     pool) and each spill (retirement pools); the same factory backs all data pools since a data
+   *     leaf is a data leaf regardless of source pool
    * @param targetBytes per-leaf target size in bytes; shared by every pool
    * @param avgBytesPerEntry projected on-disk bytes per row; shared by every pool
-   * @param priorRootLiveLeafEntries leaf-manifest-entry rows carried over unchanged from the
-   *     parent snapshot's root manifest; may be empty. Land as direct rows in the promoted root
-   *     ahead of any retirement pool tails.
    */
   V4CommitAccumulator(
-      Supplier<TrackedFileWriter> dataLeafWriterFactory,
+      Supplier<LeafManifestWriter> dataLeafWriterFactory,
       long targetBytes,
-      double avgBytesPerEntry,
-      Iterable<TrackedFile> priorRootLiveLeafEntries) {
+      double avgBytesPerEntry) {
     Preconditions.checkArgument(
         dataLeafWriterFactory != null, "Invalid data leaf writer factory: null");
-    Preconditions.checkArgument(
-        priorRootLiveLeafEntries != null, "Invalid prior root live leaf entries: null");
 
-    this.priorRootLiveLeafEntries = priorRootLiveLeafEntries;
     long avgBytesSeed = Math.max(1L, (long) avgBytesPerEntry);
-    this.dataLive = new V4StreamingWriter(dataLeafWriterFactory, targetBytes, avgBytesSeed);
+    this.dataLive =
+        new StreamingLeafManifestWriter(dataLeafWriterFactory, targetBytes, avgBytesSeed);
     this.dataDeletedRetirement =
-        new V4WritePool(dataLeafWriterFactory, targetBytes, avgBytesPerEntry, EntryStatus.DELETED);
+        new BufferedLeafManifestWriter(dataLeafWriterFactory, targetBytes, avgBytesSeed);
     this.dataReplacedRetirement =
-        new V4WritePool(dataLeafWriterFactory, targetBytes, avgBytesPerEntry, EntryStatus.REPLACED);
-    // Delete pools are wired to the same data-leaf factory only to satisfy the V4WritePool
-    // constructor; add() rejects EQUALITY_DELETES so the factory is never invoked for these pools.
-    // Phase 6 replaces these with delete-leaf factories.
-    this.deletesLive =
-        new V4WritePool(dataLeafWriterFactory, targetBytes, avgBytesPerEntry, EntryStatus.ADDED);
-    this.deletesDeletedRetirement =
-        new V4WritePool(dataLeafWriterFactory, targetBytes, avgBytesPerEntry, EntryStatus.DELETED);
+        new BufferedLeafManifestWriter(dataLeafWriterFactory, targetBytes, avgBytesSeed);
   }
 
   /**
    * Routes a row into the pool matching its {@link FileContent} and tracking status.
    *
-   * <p>The {@code isLive} parameter is retained for API symmetry with the reader-side scan path
-   * but is not consulted for pool routing; the row's own tracking status determines its pool via
-   * {@link V4RootManifestAssembler#classify(FileContent, EntryStatus)}.
+   * <p>The {@code isLive} parameter is retained for API symmetry with the reader-side scan path but
+   * is not consulted for pool routing; the row's own tracking status determines its pool via {@link
+   * V4RootManifestAssembler#classify(FileContent, EntryStatus)}.
    *
-   * @throws UnsupportedOperationException if the row is an equality delete (delete pools are
-   *     Phase 6 work)
+   * @throws UnsupportedOperationException if the row is an equality delete (delete pools are Phase
+   *     6 work)
    */
   void add(TrackedFile row, boolean isLive) {
     Preconditions.checkState(!closed, "Cannot add to a closed V4CommitAccumulator");
@@ -137,10 +121,10 @@ class V4CommitAccumulator {
   }
 
   /**
-   * Records an external leaf manifest as a reference to be written into the promoted root at
-   * close time, with the given {@link EntryStatus}. Used for imported manifests, DV-carrying
-   * manifests still on the legacy write path, and parent-snapshot carry-overs — leaves that were
-   * not produced by this accumulator but must appear as leaf-manifest-entries in the root.
+   * Records an external leaf manifest as a reference to be written into the promoted root at close
+   * time, with the given {@link EntryStatus}. Used for imported manifests, DV-carrying manifests
+   * still on the legacy write path, and parent-snapshot carry-overs — leaves that were not produced
+   * by this accumulator but must appear as leaf-manifest-entries in the root.
    */
   void addExternalLeafReference(ManifestFile leafManifest, EntryStatus status) {
     Preconditions.checkState(!closed, "Cannot add to a closed V4CommitAccumulator");
@@ -150,85 +134,83 @@ class V4CommitAccumulator {
   }
 
   /**
-   * Closes every pool, gathers direct-row extras (prior-root live leaf entries + retirement pool
-   * tails) and leaf-manifest-entry refs (from this accumulator's rolled/spilled leaves and the
-   * caller's external references), and promotes the live pool's still-open writer to the
-   * snapshot's root manifest by appending the extras + refs into it. Returns the promoted root's
-   * {@link ManifestFile}; its {@code path} is the snapshot's {@code rootManifestLocation}.
+   * Closes the retirement pools and promotes the live pool's still-open writer to the snapshot's
+   * root manifest, then drives the remaining content into the returned open {@link
+   * RootManifestWriter}: each retirement pool's sub-target tail as direct rows, and every
+   * rolled/spilled leaf plus the caller's external references as leaf-manifest-entries. Returns the
+   * root's {@link ManifestListFile}; its {@code location} is the snapshot's {@code
+   * rootManifestLocation}.
    *
    * <p>Idempotent — a second call returns the same {@code promotedRoot}.
    *
-   * @param refState commit metadata (snapshot-id, sequence-number, initial nextRowId) required to
-   *     resolve UNASSIGNED_SEQ on external leaf refs and assign first-row-ids where absent
+   * @param snapshotId the committing snapshot id, used to resolve UNASSIGNED_SEQ on refs
+   * @param sequenceNumber the committing sequence number
+   * @param nextRowId the initial first-row-id counter for freshly-written DATA manifest refs
    */
-  ManifestFile close(TrackedFileWriter.RootState refState) {
+  ManifestListFile close(long snapshotId, long sequenceNumber, Long nextRowId) {
     if (closed) {
       return promotedRoot;
     }
-    Preconditions.checkArgument(refState != null, "Invalid RootState: null");
 
-    // Close retirement + eq-delete pools first; they finalize their leaves and expose tails.
-    dataDeletedRetirement.close();
-    dataReplacedRetirement.close();
-    deletesLive.close();
-    deletesDeletedRetirement.close();
+    // Retirement pools finalize first: take each sub-target tail (direct rows) so the promoted root
+    // can inline them; their spilled leaves are referenced below.
+    List<TrackedFile> deletedTail = dataDeletedRetirement.closeAndTakeTail();
+    List<TrackedFile> replacedTail = dataReplacedRetirement.closeAndTakeTail();
 
-    // Direct-row extras for the promoted root, in a deterministic order: prior-root live leaf
-    // entries first (preserving the parent snapshot's on-disk order for unchanged references),
-    // then retirement tails, then eq-delete tails.
-    List<TrackedFile> extras = Lists.newArrayList();
-    for (TrackedFile row : priorRootLiveLeafEntries) {
-      extras.add(row);
+    // Promote the live pool's still-open writer; this method drives everything else into the
+    // returned open root writer and owns its close().
+    RootManifestWriter root = dataLive.promoteCurrentToRoot(snapshotId, sequenceNumber, nextRowId);
+
+    // Direct rows: retirement pool tails.
+    deletedTail.forEach(root::add);
+    replacedTail.forEach(root::add);
+
+    // Leaf-manifest-entries: dataLive's rolled leaves (ADDED), retirement pool leaves (DELETED /
+    // REPLACED), then caller-supplied external refs.
+    for (ManifestFile leaf : dataLive.completedLeaves()) {
+      root.addManifestEntry(leaf, EntryStatus.ADDED);
     }
-    extras.addAll(dataDeletedRetirement.rootDirectRows());
-    extras.addAll(dataReplacedRetirement.rootDirectRows());
-    extras.addAll(deletesLive.rootDirectRows());
-    extras.addAll(deletesDeletedRetirement.rootDirectRows());
 
-    // Leaf-manifest-entry refs: dataLive's rolled leaves (ADDED), retirement pool leaves
-    // (DELETED / REPLACED), eq-delete pool leaves (ADDED / DELETED — empty in this slice), plus
-    // caller-supplied external refs.
-    List<Pair<ManifestFile, EntryStatus>> refs = Lists.newArrayList();
-    for (ManifestFile leaf : dataLive.peekRolledLeaves()) {
-      refs.add(Pair.of(leaf, EntryStatus.ADDED));
+    for (ManifestFile leaf : dataDeletedRetirement.toManifestFiles()) {
+      root.addManifestEntry(leaf, EntryStatus.DELETED);
     }
-    appendRefs(refs, dataDeletedRetirement);
-    appendRefs(refs, dataReplacedRetirement);
-    appendRefs(refs, deletesLive);
-    appendRefs(refs, deletesDeletedRetirement);
-    refs.addAll(externalLeafRefs);
 
-    this.promotedRoot = dataLive.promoteCurrentToRoot(extras, refs, refState);
+    for (ManifestFile leaf : dataReplacedRetirement.toManifestFiles()) {
+      root.addManifestEntry(leaf, EntryStatus.REPLACED);
+    }
+
+    for (Pair<ManifestFile, EntryStatus> ref : externalLeafRefs) {
+      root.addManifestEntry(ref.first(), ref.second());
+    }
+
+    try {
+      root.close();
+    } catch (IOException e) {
+      throw new UncheckedIOException("Failed to close promoted root manifest writer", e);
+    }
+
+    this.promotedRoot = root.toRootManifestFile();
     this.closed = true;
     return promotedRoot;
   }
 
-  /** Returns the promoted root {@link ManifestFile}. Requires {@link #close} to have run. */
-  ManifestFile promotedRoot() {
+  /** Returns the promoted root {@link ManifestListFile}. Requires {@link #close} to have run. */
+  ManifestListFile promotedRoot() {
     Preconditions.checkState(closed, "V4CommitAccumulator is not closed yet");
     return promotedRoot;
   }
 
   /**
    * Returns every leaf manifest produced by this commit across all pools (live streaming + all
-   * retirement / eq-delete spills). Does not include the promoted root file, which is exposed
-   * separately via {@link #promotedRoot}.
+   * retirement spills). Does not include the promoted root file, which is exposed separately via
+   * {@link #promotedRoot}.
    */
   List<ManifestFile> leafManifests() {
     Preconditions.checkState(closed, "V4CommitAccumulator is not closed yet");
     ImmutableList.Builder<ManifestFile> builder = ImmutableList.builder();
     builder.addAll(dataLive.completedLeaves());
-    builder.addAll(dataDeletedRetirement.leafManifests());
-    builder.addAll(dataReplacedRetirement.leafManifests());
-    builder.addAll(deletesLive.leafManifests());
-    builder.addAll(deletesDeletedRetirement.leafManifests());
+    builder.addAll(dataDeletedRetirement.toManifestFiles());
+    builder.addAll(dataReplacedRetirement.toManifestFiles());
     return builder.build();
-  }
-
-  private static void appendRefs(List<Pair<ManifestFile, EntryStatus>> out, V4WritePool pool) {
-    EntryStatus status = pool.leafRowStatus();
-    for (ManifestFile leaf : pool.leafManifests()) {
-      out.add(Pair.of(leaf, status));
-    }
   }
 }

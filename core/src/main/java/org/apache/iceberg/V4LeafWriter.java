@@ -65,7 +65,7 @@ class V4LeafWriter<F extends ContentFile<F>> extends ManifestWriter<F> {
         public void close() {}
       };
 
-  private final TrackedFileWriter core;
+  private final LeafManifestWriter core;
   private final TrackedFileAdapters.DataTrackedFile dataAdapter;
   private final TrackedFileAdapters.EqualityDeleteTrackedFile deleteAdapter;
 
@@ -75,7 +75,7 @@ class V4LeafWriter<F extends ContentFile<F>> extends ManifestWriter<F> {
       Long snapshotId,
       Long firstRowId,
       Map<String, String> writerProperties,
-      TrackedFileWriter core,
+      LeafManifestWriter core,
       TrackedFileAdapters.DataTrackedFile dataAdapter,
       TrackedFileAdapters.EqualityDeleteTrackedFile deleteAdapter) {
     super(spec, file, snapshotId, firstRowId, writerProperties);
@@ -100,8 +100,8 @@ class V4LeafWriter<F extends ContentFile<F>> extends ManifestWriter<F> {
             spec.schema(),
             metricsConfig,
             partitionType);
-    TrackedFileWriter core =
-        TrackedFileWriter.forDataLeaf(
+    LeafManifestWriter core =
+        LeafManifestWriter.forData(
             spec, unionPartitionType, file, snapshotId, firstRowId, writerProperties);
     return new V4LeafWriter<>(
         spec, file, snapshotId, firstRowId, writerProperties, core, adapter, null);
@@ -122,10 +122,9 @@ class V4LeafWriter<F extends ContentFile<F>> extends ManifestWriter<F> {
             spec.schema(),
             metricsConfig,
             partitionType);
-    TrackedFileWriter core =
-        TrackedFileWriter.forDeleteLeaf(spec, unionPartitionType, file, snapshotId, writerProperties);
-    return new V4LeafWriter<>(
-        spec, file, snapshotId, null, writerProperties, core, null, adapter);
+    LeafManifestWriter core =
+        LeafManifestWriter.forDelete(spec, unionPartitionType, file, snapshotId, writerProperties);
+    return new V4LeafWriter<>(spec, file, snapshotId, null, writerProperties, core, null, adapter);
   }
 
   // ---- Add / existing / delete overrides ------------------------------------
@@ -137,14 +136,7 @@ class V4LeafWriter<F extends ContentFile<F>> extends ManifestWriter<F> {
     // source file where present (v4+ per-entry firstRowId assignment).
     Tracking tracking =
         new TrackingStruct(
-            EntryStatus.ADDED,
-            snapshotId,
-            null,
-            null,
-            null,
-            addedFile.firstRowId(),
-            null,
-            null);
+            EntryStatus.ADDED, snapshotId, null, null, null, addedFile.firstRowId(), null, null);
     core.add(wrapContentFile(addedFile, tracking));
   }
 
@@ -166,7 +158,8 @@ class V4LeafWriter<F extends ContentFile<F>> extends ManifestWriter<F> {
 
   @Override
   void add(ManifestEntry<F> entry) {
-    // Re-wrap the entry as a fresh ADDED entry (matching parent ManifestWriter semantics), preserving
+    // Re-wrap the entry as a fresh ADDED entry (matching parent ManifestWriter semantics),
+    // preserving
     // any explicit data sequence number the caller pre-assigned.
     if (entry.dataSequenceNumber() != null && entry.dataSequenceNumber() >= 0) {
       add(entry.file(), entry.dataSequenceNumber());
@@ -177,8 +170,8 @@ class V4LeafWriter<F extends ContentFile<F>> extends ManifestWriter<F> {
 
   /**
    * Processes an already-built entry verbatim (preserving its status and sequence numbers), as
-   * opposed to {@link #add(ManifestEntry)} which re-wraps it as a fresh ADDED entry. Used by
-   * {@link ManifestReader} during rewriteManifests to preserve entries' historical status.
+   * opposed to {@link #add(ManifestEntry)} which re-wraps it as a fresh ADDED entry. Used by {@link
+   * ManifestReader} during rewriteManifests to preserve entries' historical status.
    */
   @Override
   void addEntry(ManifestEntry<F> entry) {
@@ -218,10 +211,7 @@ class V4LeafWriter<F extends ContentFile<F>> extends ManifestWriter<F> {
   @Override
   void existing(ManifestEntry<F> entry) {
     existing(
-        entry.file(),
-        entry.snapshotId(),
-        entry.dataSequenceNumber(),
-        entry.fileSequenceNumber());
+        entry.file(), entry.snapshotId(), entry.dataSequenceNumber(), entry.fileSequenceNumber());
   }
 
   @Override

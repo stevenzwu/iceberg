@@ -36,6 +36,7 @@ class V4ManifestReaderAdapter<F extends ContentFile<F>> extends ManifestReader<F
   private final String manifestLocation;
   private final Long firstRowId;
   private final boolean isCommitted;
+  private final boolean directRowsOnly;
 
   V4ManifestReaderAdapter(
       InputFile file,
@@ -43,7 +44,7 @@ class V4ManifestReaderAdapter<F extends ContentFile<F>> extends ManifestReader<F
       Map<Integer, PartitionSpec> specsById,
       V4ManifestReader v4Reader,
       ManifestContent manifestContent) {
-    this(file, specId, specsById, v4Reader, manifestContent, null, true);
+    this(file, specId, specsById, v4Reader, manifestContent, null, true, false);
   }
 
   V4ManifestReaderAdapter(
@@ -54,6 +55,23 @@ class V4ManifestReaderAdapter<F extends ContentFile<F>> extends ManifestReader<F
       ManifestContent manifestContent,
       Long firstRowId,
       boolean isCommitted) {
+    this(file, specId, specsById, v4Reader, manifestContent, firstRowId, isCommitted, false);
+  }
+
+  /**
+   * @param directRowsOnly when true, entries are drawn from {@link
+   *     V4ManifestReader#directDataEntriesFromRoot()} — filters co-resident manifest-reference rows
+   *     out of a promoted root's row iterator. Only valid for {@link ManifestContent#DATA}.
+   */
+  V4ManifestReaderAdapter(
+      InputFile file,
+      int specId,
+      Map<Integer, PartitionSpec> specsById,
+      V4ManifestReader v4Reader,
+      ManifestContent manifestContent,
+      Long firstRowId,
+      boolean isCommitted,
+      boolean directRowsOnly) {
     super(
         file,
         specId,
@@ -66,6 +84,7 @@ class V4ManifestReaderAdapter<F extends ContentFile<F>> extends ManifestReader<F
     this.manifestLocation = file.location();
     this.firstRowId = firstRowId;
     this.isCommitted = isCommitted;
+    this.directRowsOnly = directRowsOnly;
     addCloseable(v4Reader);
   }
 
@@ -82,7 +101,10 @@ class V4ManifestReaderAdapter<F extends ContentFile<F>> extends ManifestReader<F
 
   @SuppressWarnings({"unchecked", "rawtypes"})
   private CloseableIterable<ManifestEntry<F>> rawEntries() {
-    if (manifestContent == ManifestContent.DATA) {
+    if (directRowsOnly) {
+      return (CloseableIterable<ManifestEntry<F>>)
+          (CloseableIterable) v4Reader.directDataEntriesFromRoot();
+    } else if (manifestContent == ManifestContent.DATA) {
       return (CloseableIterable<ManifestEntry<F>>) (CloseableIterable) v4Reader.dataEntries();
     } else {
       return (CloseableIterable<ManifestEntry<F>>) (CloseableIterable) v4Reader.deleteEntries();

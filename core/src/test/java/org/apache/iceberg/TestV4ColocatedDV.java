@@ -86,8 +86,7 @@ public class TestV4ColocatedDV {
 
     Types.StructType statsType =
         StatsUtil.statsReadSchema(spec.schema(), TypeUtil.getProjectedIds(spec.schema()));
-    Schema contentEntrySchema =
-        TrackedFile.schema(spec.rawPartitionType(), statsType);
+    Schema contentEntrySchema = TrackedFile.schema(spec.rawPartitionType(), statsType);
 
     InternalData.ReadBuilder readBuilder =
         InternalData.read(FileFormat.PARQUET, table.io().newInputFile(manifest.path()))

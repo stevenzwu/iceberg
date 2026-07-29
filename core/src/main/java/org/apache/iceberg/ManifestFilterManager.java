@@ -100,6 +100,12 @@ abstract class ManifestFilterManager<F extends ContentFile<F>> {
   // downstream leaf-manifest set so they do not also flow through as external leaf references.
   private final Set<ManifestFile> v4ConsumedManifests = Sets.newConcurrentHashSet();
 
+  // files retired from the parent snapshot's promoted-root direct rows on the v4 adaptive path.
+  // Populated by filterDirectDataFiles and surfaced through filesToBeDeleted() so downstream
+  // consumers (snapshot summary, dangling-DV removal) see these retirements alongside the ones
+  // identified by filterManifests.
+  private final Set<F> directDeletedFiles = newFileSet();
+
   private final Supplier<ExecutorService> workerPoolSupplier;
 
   protected ManifestFilterManager(
@@ -141,6 +147,17 @@ abstract class ManifestFilterManager<F extends ContentFile<F>> {
   }
 
   /**
+   * Routes a single retired direct data-file row through the v4 adaptive-tree accumulator with the
+   * given {@code targetStatus} (DELETED for retirement). Called by {@link #filterDirectDataFiles}
+   * for each file identified from the parent snapshot's promoted-root direct rows that matches a
+   * delete predicate; the base implementation throws.
+   */
+  protected void routeV4AdaptiveDirectFile(F file, EntryStatus targetStatus, Schema tableSchema) {
+    throw new UnsupportedOperationException(
+        "v4 adaptive direct-file routing is not supported by this filter manager");
+  }
+
+  /**
    * Called when this filter manager's cache is invalidated (typically because the caller registered
    * new file/expression deletes after a previous filter pass). Subclasses on the v4 adaptive-tree
    * path override to clear the accumulator's retirement input buffer so the routed rows from the
@@ -157,7 +174,13 @@ abstract class ManifestFilterManager<F extends ContentFile<F>> {
   }
 
   protected Set<F> filesToBeDeleted() {
-    return deleteFiles;
+    if (directDeletedFiles.isEmpty()) {
+      return deleteFiles;
+    }
+    Set<F> combined = newFileSet();
+    combined.addAll(deleteFiles);
+    combined.addAll(directDeletedFiles);
+    return combined;
   }
 
   /**
@@ -234,6 +257,69 @@ abstract class ManifestFilterManager<F extends ContentFile<F>> {
         || !deleteFiles.isEmpty()
         || deleteExpression != Expressions.alwaysFalse()
         || !dropPartitions.isEmpty();
+  }
+
+  /**
+   * Filters the parent snapshot's promoted-root direct data rows against this filter manager's
+   * registered delete criteria (paths, files, dropped partitions, and delete expression). For each
+   * matched file, routes a DELETED retirement row through the v4 adaptive-tree accumulator via
+   * {@link #routeV4AdaptiveDirectFile} so it lands in the retirement pool exactly like retirements
+   * discovered from filtering source manifests. Returns the set of files that matched so callers
+   * can suppress them from any downstream carry-over pipe.
+   *
+   * <p>Direct rows may span multiple partition specs (files retained from older-spec commits carry
+   * their original spec id). Files are grouped by {@code specId()} and evaluated against a per-spec
+   * {@link PartitionAndMetricsEvaluator} so residual expression evaluation aligns with each file's
+   * partition tuple type.
+   *
+   * <p>A no-op returning an empty set when {@link #containsDeletes()} is false (no delete criteria
+   * registered). Throws the same {@link ValidationException} as {@link
+   * #filterManifestWithDeletedFiles} for a file with a partial predicate match.
+   */
+  @SuppressWarnings("CollectionUndefinedEquality")
+  Set<F> filterDirectDataFiles(Iterable<F> directFiles, Schema tableSchema) {
+    Set<F> matched = newFileSet();
+    if (!containsDeletes()) {
+      return matched;
+    }
+
+    Map<Integer, List<F>> filesBySpec = Maps.newHashMap();
+    for (F file : directFiles) {
+      filesBySpec.computeIfAbsent(file.specId(), k -> Lists.newArrayList()).add(file);
+    }
+
+    for (Map.Entry<Integer, List<F>> entry : filesBySpec.entrySet()) {
+      PartitionSpec spec = specsById.get(entry.getKey());
+      Preconditions.checkArgument(
+          spec != null, "Cannot filter direct rows for unknown spec id: %s", entry.getKey());
+      PartitionAndMetricsEvaluator evaluator =
+          new PartitionAndMetricsEvaluator(tableSchema, spec, deleteExpression);
+      for (F file : entry.getValue()) {
+        boolean markedForDelete =
+            deletePaths.contains(file.location())
+                || deleteFiles.contains(file)
+                || dropPartitions.contains(file.specId(), file.partition());
+        if (markedForDelete || evaluator.rowsMightMatch(file)) {
+          boolean allRowsMatch = markedForDelete || evaluator.rowsMustMatch(file);
+          ValidationException.check(
+              allRowsMatch,
+              "Cannot delete file where some, but not all, rows match filter %s: %s",
+              this.deleteExpression,
+              file.location());
+
+          if (failAnyDelete) {
+            throw new DeleteException(spec.partitionToPath(file.partition()));
+          }
+
+          routeV4AdaptiveDirectFile(file, EntryStatus.DELETED, tableSchema);
+          F fileCopy = file.copyWithoutStats();
+          matched.add(fileCopy);
+          directDeletedFiles.add(fileCopy);
+        }
+      }
+    }
+
+    return matched;
   }
 
   /**
@@ -314,6 +400,10 @@ abstract class ManifestFilterManager<F extends ContentFile<F>> {
   private void validateRequiredDeletes(ManifestFile... manifests) {
     if (failMissingDeletePaths) {
       Set<F> deletedFiles = deletedFiles(manifests);
+      // On the v4 adaptive path, files retired from the parent's promoted-root direct rows are
+      // tracked in directDeletedFiles rather than surfaced through any filtered leaf manifest, so
+      // include them in the require-lookup.
+      deletedFiles.addAll(directDeletedFiles);
       ValidationException.check(
           deletedFiles.containsAll(deleteFiles),
           "Missing required files to delete: %s",
@@ -405,6 +495,7 @@ abstract class ManifestFilterManager<F extends ContentFile<F>> {
     cleanUncommitted(SnapshotProducer.EMPTY_SET);
     replacedManifestsCount.set(0);
     v4ConsumedManifests.clear();
+    directDeletedFiles.clear();
     resetV4AdaptiveState();
   }
 

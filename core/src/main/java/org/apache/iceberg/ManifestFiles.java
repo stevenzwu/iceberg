@@ -43,11 +43,11 @@ import org.apache.iceberg.io.OutputFile;
 import org.apache.iceberg.metrics.CacheMetricsReport;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
-import org.apache.iceberg.types.Types;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.math.IntMath;
+import org.apache.iceberg.types.Types;
 import org.apache.iceberg.util.Pair;
 import org.apache.iceberg.util.PropertyUtil;
 import org.apache.iceberg.util.Tasks;
@@ -282,6 +282,23 @@ public class ManifestFiles {
     InputFile file = newInputFile(io, manifest);
     InheritableMetadata inheritableMetadata = InheritableMetadataFactory.fromManifest(manifest);
 
+    if (manifest instanceof RootDirectRowsManifestFile) {
+      // Virtual manifest over a promoted root's direct DATA rows. Open the root as a v4 reader and
+      // filter co-resident DATA_MANIFEST / DELETE_MANIFEST rows out before yielding entries.
+      V4ManifestReader v4Reader =
+          V4ManifestReader.forData(
+              file, manifest.partitionSpecId(), specsById, inheritableMetadata);
+      return new V4ManifestReaderAdapter<>(
+          file,
+          manifest.partitionSpecId(),
+          specsById,
+          v4Reader,
+          ManifestContent.DATA,
+          manifest.firstRowId(),
+          isCommitted,
+          true /* directRowsOnly */);
+    }
+
     if (manifest.formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
       V4ManifestReader v4Reader =
           V4ManifestReader.forData(
@@ -477,10 +494,10 @@ public class ManifestFiles {
   }
 
   /**
-   * Returns a v4+ union partition type suitable for a single-spec writer factory. Callers that
-   * know the table's full union type (e.g., {@link SnapshotProducer#newManifestWriter}) pass it
-   * directly to {@link #newV4Writer} / {@link #newV4DeleteWriter}; this helper is for callers that
-   * only have a single {@link PartitionSpec}. For pre-v4 format versions it returns {@code null}.
+   * Returns a v4+ union partition type suitable for a single-spec writer factory. Callers that know
+   * the table's full union type (e.g., {@link SnapshotProducer#newManifestWriter}) pass it directly
+   * to {@link #newV4Writer} / {@link #newV4DeleteWriter}; this helper is for callers that only have
+   * a single {@link PartitionSpec}. For pre-v4 format versions it returns {@code null}.
    */
   static Types.StructType v4UnionPartitionType(int formatVersion, PartitionSpec spec) {
     if (formatVersion < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
