@@ -39,6 +39,22 @@ public interface RowDelta extends SnapshotUpdate<RowDelta> {
   RowDelta addRows(DataFile inserts);
 
   /**
+   * Add a {@link DataFile} to the table with a colocated deletion vector attached in the same
+   * commit (born-with-DV). Supported on v4+ tables; the DV is written inline on the data manifest
+   * entry so it never lands in a separate delete manifest.
+   *
+   * @param inserts a data file of rows to insert
+   * @param deletionVector a {@link DeleteFile} with {@link FileContent#POSITION_DELETES} content,
+   *     {@link FileFormat#PUFFIN} format, and {@link DeleteFile#referencedDataFile()} equal to
+   *     {@code inserts.location()}
+   * @return this for method chaining
+   */
+  default RowDelta addRows(DataFile inserts, DeleteFile deletionVector) {
+    throw new UnsupportedOperationException(
+        getClass().getName() + " does not implement addRows(DataFile, DeleteFile)");
+  }
+
+  /**
    * Add a {@link DeleteFile} to the table.
    *
    * @param deletes a delete file of rows to delete

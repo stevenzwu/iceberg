@@ -141,7 +141,15 @@ class DeleteFileIndex {
   }
 
   DeleteFile[] forEntry(ManifestEntry<DataFile> entry) {
-    return forDataFile(entry.dataSequenceNumber(), entry.file());
+    Long entrySeq = entry.dataSequenceNumber();
+    if (entrySeq == null) {
+      entrySeq = entry.file().dataSequenceNumber();
+    }
+    Preconditions.checkState(
+        entrySeq != null,
+        "Missing data sequence number for entry (file: %s); cannot resolve applicable deletes",
+        entry.file().location());
+    return forDataFile(entrySeq, entry.file());
   }
 
   DeleteFile[] forDataFile(DataFile file) {

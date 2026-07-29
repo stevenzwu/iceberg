@@ -32,13 +32,15 @@ import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.Iterables;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
+import org.apache.iceberg.util.Pair;
 
 class BaseSnapshot implements Snapshot {
   private final long snapshotId;
   private final Long parentId;
   private final long sequenceNumber;
   private final long timestampMillis;
-  private final String manifestListLocation;
+  private final String snapshotFileLocation;
+  private final int formatVersion;
   private final String operation;
   private final Map<String, String> summary;
   private final Integer schemaId;
@@ -64,10 +66,40 @@ class BaseSnapshot implements Snapshot {
       String operation,
       Map<String, String> summary,
       Integer schemaId,
-      String manifestList,
+      String snapshotFileLocation,
       Long firstRowId,
       Long addedRows,
       String keyId) {
+    this(
+        2,
+        sequenceNumber,
+        snapshotId,
+        parentId,
+        timestampMillis,
+        operation,
+        summary,
+        schemaId,
+        snapshotFileLocation,
+        firstRowId,
+        addedRows,
+        keyId);
+  }
+
+  BaseSnapshot(
+      int formatVersion,
+      long sequenceNumber,
+      long snapshotId,
+      Long parentId,
+      long timestampMillis,
+      String operation,
+      Map<String, String> summary,
+      Integer schemaId,
+      String snapshotFileLocation,
+      Long firstRowId,
+      Long addedRows,
+      String keyId) {
+    Preconditions.checkArgument(
+        snapshotFileLocation != null, "Invalid snapshot: snapshot file location cannot be null");
     Preconditions.checkArgument(
         firstRowId == null || firstRowId >= 0,
         "Invalid first-row-id (cannot be negative): %s",
@@ -79,6 +111,7 @@ class BaseSnapshot implements Snapshot {
     Preconditions.checkArgument(
         firstRowId == null || addedRows != null,
         "Invalid added-rows (required when first-row-id is set): null");
+    this.formatVersion = formatVersion;
     this.sequenceNumber = sequenceNumber;
     this.snapshotId = snapshotId;
     this.parentId = parentId;
@@ -86,7 +119,7 @@ class BaseSnapshot implements Snapshot {
     this.operation = operation;
     this.summary = summary;
     this.schemaId = schemaId;
-    this.manifestListLocation = manifestList;
+    this.snapshotFileLocation = snapshotFileLocation;
     this.v1ManifestLocations = null;
     this.firstRowId = firstRowId;
     this.addedRows = firstRowId != null ? addedRows : null;
@@ -102,6 +135,7 @@ class BaseSnapshot implements Snapshot {
       Map<String, String> summary,
       Integer schemaId,
       String[] v1ManifestLocations) {
+    this.formatVersion = 1;
     this.sequenceNumber = sequenceNumber;
     this.snapshotId = snapshotId;
     this.parentId = parentId;
@@ -109,7 +143,7 @@ class BaseSnapshot implements Snapshot {
     this.operation = operation;
     this.summary = summary;
     this.schemaId = schemaId;
-    this.manifestListLocation = null;
+    this.snapshotFileLocation = null;
     this.v1ManifestLocations = v1ManifestLocations;
     this.firstRowId = null;
     this.addedRows = null;
@@ -182,10 +216,17 @@ class BaseSnapshot implements Snapshot {
 
     if (allManifests == null) {
       // if manifests isn't set, then the snapshotFile is set and should be read to get the list
-      this.allManifests =
-          ManifestLists.read(
-              ManifestLists.newInputFile(
-                  fileIO, new BaseManifestListFile(manifestListLocation, keyId)));
+      if (formatVersion >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
+        this.allManifests =
+            RootManifests.read(
+                fileIO.newInputFile(new BaseSnapshotFile(snapshotFileLocation, keyId)),
+                sequenceNumber);
+      } else {
+        this.allManifests =
+            ManifestLists.read(
+                ManifestLists.newInputFile(
+                    fileIO, new BaseManifestListFile(snapshotFileLocation, keyId)));
+      }
     }
 
     if (dataManifests == null || deleteManifests == null) {
@@ -257,8 +298,22 @@ class BaseSnapshot implements Snapshot {
   }
 
   @Override
+  public String snapshotFileLocation() {
+    return snapshotFileLocation;
+  }
+
+  @Override
   public String manifestListLocation() {
-    return manifestListLocation;
+    Preconditions.checkState(
+        formatVersion < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE,
+        "Snapshot format version %s has no manifest list; use snapshotFileLocation() instead",
+        formatVersion);
+    return snapshotFileLocation;
+  }
+
+  @Override
+  public int formatVersion() {
+    return formatVersion;
   }
 
   private void cacheDeleteFileChanges(FileIO fileIO) {
@@ -291,6 +346,33 @@ class BaseSnapshot implements Snapshot {
       }
     }
 
+    // v4+ colocated DVs live on data manifests' ADDED/MODIFIED rows (newly-live DVs) and REPLACED
+    // rows (superseded DVs preserved by V4LeafWriter.replacedEntry). Scan data manifests written
+    // by this snapshot to surface those DV changes as delete-file deltas. Legacy data manifests
+    // produce an empty iterable from readColocatedDVChanges, so this scan is a no-op for v1-v3.
+    Iterable<ManifestFile> changedDataManifests =
+        Iterables.filter(
+            dataManifests(fileIO), manifest -> Objects.equal(manifest.snapshotId(), snapshotId));
+    for (ManifestFile manifest : changedDataManifests) {
+      try (CloseableIterable<Pair<ManifestEntry.Status, DeleteFile>> changes =
+          ManifestFiles.readColocatedDVChanges(manifest, fileIO, null)) {
+        for (Pair<ManifestEntry.Status, DeleteFile> pair : changes) {
+          switch (pair.first()) {
+            case ADDED:
+              adds.add(pair.second());
+              break;
+            case DELETED:
+              deletes.add(pair.second());
+              break;
+            default:
+              // No other statuses surface from readColocatedDVChanges.
+          }
+        }
+      } catch (IOException e) {
+        throw new UncheckedIOException("Failed to close manifest reader", e);
+      }
+    }
+
     this.addedDeleteFiles = adds.build();
     this.removedDeleteFiles = deletes.build();
   }
@@ -305,23 +387,29 @@ class BaseSnapshot implements Snapshot {
     Iterable<ManifestFile> changedManifests =
         Iterables.filter(
             dataManifests(fileIO), manifest -> Objects.equal(manifest.snapshotId(), snapshotId));
-    try (CloseableIterable<ManifestEntry<DataFile>> entries =
-        new ManifestGroup(fileIO, changedManifests).ignoreExisting().entries()) {
-      for (ManifestEntry<DataFile> entry : entries) {
-        switch (entry.status()) {
-          case ADDED:
-            adds.add(entry.file().copy());
-            break;
-          case DELETED:
-            deletes.add(entry.file().copyWithoutStats());
-            break;
-          default:
-            throw new IllegalStateException(
-                "Unexpected entry status, not added or deleted: " + entry);
+    for (ManifestFile manifest : changedManifests) {
+      // TODO: v4 change detection is deferred. v4+ leaves may carry REPLACED/MODIFIED pairs (DV
+      // rewrites) that the legacy adapter collapses to DELETED/EXISTING, so a data file whose only
+      // change is a DV update will surface here as removed. Accurate change detection needs to
+      // join REPLACED/MODIFIED pairs that may live in different leaf manifests.
+      try (CloseableIterable<ManifestEntry<DataFile>> entries =
+          new ManifestGroup(fileIO, ImmutableList.of(manifest)).ignoreExisting().entries()) {
+        for (ManifestEntry<DataFile> entry : entries) {
+          switch (entry.status()) {
+            case ADDED:
+              adds.add(entry.file().copy());
+              break;
+            case DELETED:
+              deletes.add(entry.file().copyWithoutStats());
+              break;
+            default:
+              throw new IllegalStateException(
+                  "Unexpected entry status, not added or deleted: " + entry);
+          }
         }
+      } catch (IOException e) {
+        throw new RuntimeIOException(e, "Failed to close entries while caching changes");
       }
-    } catch (IOException e) {
-      throw new RuntimeIOException(e, "Failed to close entries while caching changes");
     }
 
     this.addedDataFiles = adds.build();
@@ -369,7 +457,7 @@ class BaseSnapshot implements Snapshot {
         .add("timestamp_ms", timestampMillis)
         .add("operation", operation)
         .add("summary", summary)
-        .add("manifest-list", manifestListLocation)
+        .add("snapshot-file", snapshotFileLocation)
         .add("schema-id", schemaId)
         .add("first-row-id", firstRowId)
         .add("added-rows", addedRows)

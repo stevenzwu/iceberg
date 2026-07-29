@@ -30,6 +30,7 @@ import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.Iterables;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
+import org.apache.iceberg.util.ContentFileUtil;
 import org.apache.iceberg.util.DataFileSet;
 
 /** {@link AppendFiles Append} implementation that adds new manifest files for writes. */
@@ -37,6 +38,7 @@ class FastAppend extends SnapshotProducer<AppendFiles> implements AppendFiles {
   private final String tableName;
   private final SnapshotSummary.Builder summaryBuilder = SnapshotSummary.builder();
   private final Map<Integer, DataFileSet> newDataFilesBySpec = Maps.newHashMap();
+  private final Map<String, DeleteFile> bornWithDVByPath = Maps.newHashMap();
   private final List<ManifestFile> appendManifests = Lists.newArrayList();
   private final List<ManifestFile> rewrittenAppendManifests = Lists.newArrayList();
   private final List<ManifestFile> newManifests = Lists.newArrayList();
@@ -92,6 +94,33 @@ class FastAppend extends SnapshotProducer<AppendFiles> implements AppendFiles {
       summaryBuilder.addedFile(spec, file);
     }
 
+    return this;
+  }
+
+  @Override
+  public FastAppend appendFile(DataFile file, DeleteFile deletionVector) {
+    Preconditions.checkArgument(file != null, "Data file cannot be null");
+    Preconditions.checkArgument(deletionVector != null, "Deletion vector cannot be null");
+    int formatVersion = ops().current().formatVersion();
+    Preconditions.checkArgument(
+        formatVersion >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE,
+        "Cannot use born-with-DV appendFile for format version %s (minimum: %s)",
+        formatVersion,
+        TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE);
+    Preconditions.checkArgument(
+        ContentFileUtil.isDV(deletionVector),
+        "Deletion vector must be a puffin position-delete file: %s",
+        deletionVector.location());
+    Preconditions.checkArgument(
+        file.location().equals(deletionVector.referencedDataFile()),
+        "Deletion vector %s must reference data file %s (got %s)",
+        deletionVector.location(),
+        file.location(),
+        deletionVector.referencedDataFile());
+    appendFile(file);
+    if (bornWithDVByPath.put(file.location(), deletionVector) == null) {
+      summaryBuilder.addedFile(spec(file.specId()), deletionVector);
+    }
     return this;
   }
 
@@ -163,7 +192,16 @@ class FastAppend extends SnapshotProducer<AppendFiles> implements AppendFiles {
     Iterables.addAll(manifests, appendManifestsWithMetadata);
 
     if (snapshot != null) {
-      manifests.addAll(snapshot.allManifests(ops().io()));
+      for (ManifestFile parentManifest : snapshot.allManifests(ops().io())) {
+        // v4 adaptive: skip the virtual manifest over the parent's root direct rows.
+        // runAdaptiveDrainAndPromote carries those rows forward via readParentDirectRowsAsExisting;
+        // surfacing them here as an external leaf ref would double-count and also fail metadata
+        // enrichment (a virtual manifest has no on-disk leaf shape).
+        if (parentManifest instanceof RootDirectRowsManifestFile) {
+          continue;
+        }
+        manifests.add(parentManifest);
+      }
     }
 
     summaryBuilder.merge(buildManifestCountSummary(manifests, 0));
@@ -205,6 +243,21 @@ class FastAppend extends SnapshotProducer<AppendFiles> implements AppendFiles {
     if (hasNewFiles && !newManifests.isEmpty()) {
       newManifests.forEach(file -> deleteFile(file.path()));
       newManifests.clear();
+    }
+
+    // v4 adaptive-tree path: route new DataFiles as TrackedFile rows into the accumulator input
+    // channel instead of writing per-spec leaf manifests up front. The commit's applyRootManifest
+    // drain
+    // decides whether each row lands as a root direct row (below the per-leaf target) or spills
+    // into a leaf-manifest-entry — no small-write leaf is materialized for below-target commits.
+    if (ops().current().formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE
+        && !newDataFilesBySpec.isEmpty()) {
+      injectV4AdaptiveDataFiles(
+          Iterables.concat(newDataFilesBySpec.values()),
+          null /* inherit data seq */,
+          bornWithDVByPath.isEmpty() ? null : bornWithDVByPath);
+      hasNewFiles = false;
+      return newManifests;
     }
 
     if (newManifests.isEmpty() && !newDataFilesBySpec.isEmpty()) {

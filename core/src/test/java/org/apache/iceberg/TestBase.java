@@ -526,24 +526,51 @@ public class TestBase {
     assertThat(old != null ? Sets.newHashSet(old.deleteManifests(FILE_IO)) : ImmutableSet.of())
         .as("Should not change delete manifests")
         .isEqualTo(Sets.newHashSet(snap.deleteManifests(FILE_IO)));
-    List<ManifestFile> oldManifests = old != null ? old.dataManifests(FILE_IO) : ImmutableList.of();
 
-    // copy the manifests to a modifiable list and remove the existing manifests
-    List<ManifestFile> newManifests = Lists.newArrayList(snap.dataManifests(FILE_IO));
-    for (ManifestFile oldManifest : oldManifests) {
-      assertThat(newManifests.remove(oldManifest))
-          .as("New snapshot should contain old manifests")
-          .isTrue();
+    // v4+ adaptive: parent's leaf manifests are not preserved by-path — small-write commits pull
+    // files into root direct rows instead of chaining leaf refs. The child's single manifest
+    // (virtual over the promoted root) carries both the freshly-added ADDED rows and the
+    // carried-over EXISTING/MODIFIED rows. Restrict the entry iteration to ADDED rows so the
+    // remainder of this helper (sequence numbers + expected paths) matches {@code newFiles}.
+    boolean adaptive = formatVersion >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE;
+    ManifestFile manifest;
+    if (adaptive) {
+      List<ManifestFile> newManifests = Lists.newArrayList(snap.dataManifests(FILE_IO));
+      assertThat(newManifests)
+          .as("v4 snapshot must surface at least one data manifest")
+          .isNotEmpty();
+      // The virtual manifest over the promoted root — or an on-disk leaf when this commit spilled —
+      // whose snapshotId matches the current commit.
+      manifest =
+          newManifests.stream()
+              .filter(m -> m.snapshotId() != null && m.snapshotId() == snap.snapshotId())
+              .findFirst()
+              .orElse(newManifests.get(newManifests.size() - 1));
+    } else {
+      List<ManifestFile> oldManifests =
+          old != null ? old.dataManifests(FILE_IO) : ImmutableList.of();
+      List<ManifestFile> newManifests = Lists.newArrayList(snap.dataManifests(FILE_IO));
+      for (ManifestFile oldManifest : oldManifests) {
+        assertThat(newManifests.remove(oldManifest))
+            .as("New snapshot should contain old manifests")
+            .isTrue();
+      }
+      assertThat(newManifests)
+          .as("Should create 1 new manifest and reuse old manifests")
+          .hasSize(1);
+      manifest = newManifests.get(0);
     }
-
-    assertThat(newManifests).as("Should create 1 new manifest and reuse old manifests").hasSize(1);
-    ManifestFile manifest = newManifests.get(0);
 
     long id = snap.snapshotId();
     Iterator<String> newPaths = paths(newFiles).iterator();
 
     for (ManifestEntry<DataFile> entry :
         ManifestFiles.read(manifest, FILE_IO, validationTable.specs()).entries()) {
+      // On adaptive v4+, the virtual manifest surfaces both freshly-added rows and carried-over
+      // EXISTING/MODIFIED rows; only ADDED rows correspond to {@code newFiles} for this commit.
+      if (adaptive && entry.status() != ManifestEntry.Status.ADDED) {
+        continue;
+      }
       DataFile file = entry.file();
       if (sequenceNumber != null) {
         V1Assert.assertEquals(

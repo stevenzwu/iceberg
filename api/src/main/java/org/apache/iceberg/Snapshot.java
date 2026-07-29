@@ -167,8 +167,33 @@ public interface Snapshot extends Serializable {
    * Return the location of this snapshot's manifest list, or null if it is not separate.
    *
    * @return the location of the manifest list for this Snapshot
+   * @deprecated since 1.13.0; use {@link #snapshotFileLocation()}, which returns the manifest list
+   *     for v3 and earlier and the root manifest for v4+.
    */
+  @Deprecated
   String manifestListLocation();
+
+  /**
+   * Returns the location of this snapshot's top-level file — a manifest list for v3 and earlier, or
+   * a root manifest for v4+.
+   *
+   * @return the location of the snapshot file for this Snapshot
+   */
+  default String snapshotFileLocation() {
+    return manifestListLocation();
+  }
+
+  /**
+   * Returns the format version of this snapshot. The default returns {@link
+   * ManifestFile#LEGACY_FORMAT_VERSION} as a sentinel for external implementations that predate
+   * this accessor; concrete Iceberg snapshots ({@code BaseSnapshot}) override with the real value.
+   *
+   * @return the format version, or {@link ManifestFile#LEGACY_FORMAT_VERSION} if the implementation
+   *     does not report one
+   */
+  default int formatVersion() {
+    return ManifestFile.LEGACY_FORMAT_VERSION;
+  }
 
   /**
    * Return the id of the schema used when this snapshot was created, or null if this information is

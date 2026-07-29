@@ -20,6 +20,7 @@ package org.apache.iceberg;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assumptions.assumeThat;
 
 import java.io.File;
 import java.io.IOException;
@@ -665,5 +666,18 @@ public class TestFastAppend extends TestBase {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage(
             "some-tag is a tag, not a branch. Tags cannot be targets for producing snapshots");
+  }
+
+  @TestTemplate
+  public void testBornWithDVRejectedOnPreV4Table() {
+    assumeThat(formatVersion).isLessThan(TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE);
+    assertThatThrownBy(() -> table.newFastAppend().appendFile(FILE_A, FILE_A_DV))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage(
+            "Cannot use born-with-DV appendFile for format version "
+                + formatVersion
+                + " (minimum: "
+                + TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE
+                + ")");
   }
 }

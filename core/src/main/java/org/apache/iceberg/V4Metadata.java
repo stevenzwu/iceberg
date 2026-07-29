@@ -421,6 +421,11 @@ class V4Metadata {
     }
 
     @Override
+    public DeleteFile deletionVector() {
+      return wrapped.deletionVector();
+    }
+
+    @Override
     public ManifestEntry<F> copy() {
       return wrapped.copy();
     }

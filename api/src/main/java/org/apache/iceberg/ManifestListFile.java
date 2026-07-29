@@ -18,17 +18,10 @@
  */
 package org.apache.iceberg;
 
-import java.nio.ByteBuffer;
-import org.apache.iceberg.encryption.EncryptionManager;
-
-public interface ManifestListFile {
-
-  /** Location of manifest list file. */
-  String location();
-
-  /** The manifest list key metadata can be encrypted. Returns ID of encryption key */
-  String encryptionKeyID();
-
-  /** Decrypt and return the manifest list key metadata */
-  ByteBuffer decryptKeyMetadata(EncryptionManager em);
-}
+/**
+ * A v3-and-earlier manifest list file.
+ *
+ * @deprecated since 1.13.0; prefer {@link SnapshotFile}, which also covers v4+ root manifests.
+ */
+@Deprecated
+public interface ManifestListFile extends SnapshotFile {}

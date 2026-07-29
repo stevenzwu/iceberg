@@ -50,6 +50,7 @@ public class SnapshotParser {
   private static final String OPERATION = "operation";
   private static final String MANIFESTS = "manifests";
   private static final String MANIFEST_LIST = "manifest-list";
+  private static final String ROOT_MANIFEST = "root-manifest";
   private static final String SCHEMA_ID = "schema-id";
   private static final String FIRST_ROW_ID = "first-row-id";
   private static final String ADDED_ROWS = "added-rows";
@@ -82,17 +83,7 @@ public class SnapshotParser {
       generator.writeEndObject();
     }
 
-    String manifestList = snapshot.manifestListLocation();
-    if (manifestList != null) {
-      // write just the location. manifests should not be embedded in JSON along with a list
-      generator.writeStringField(MANIFEST_LIST, manifestList);
-    } else {
-      // embed the manifest list in the JSON, v1 only
-      JsonUtil.writeStringArray(
-          MANIFESTS,
-          Iterables.transform(snapshot.allManifests(DUMMY_FILE_IO), ManifestFile::path),
-          generator);
-    }
+    writeSnapshotFileLocation(snapshot, generator);
 
     // schema ID might be null for snapshots written by old writers
     if (snapshot.schemaId() != null) {
@@ -110,6 +101,26 @@ public class SnapshotParser {
     JsonUtil.writeStringFieldIfPresent(KEY_ID, snapshot.keyId(), generator);
 
     generator.writeEndObject();
+  }
+
+  private static void writeSnapshotFileLocation(Snapshot snapshot, JsonGenerator generator)
+      throws IOException {
+    String snapshotFile = snapshot.snapshotFileLocation();
+    if (snapshotFile == null) {
+      // embed the manifest list in the JSON, v1 only
+      JsonUtil.writeStringArray(
+          MANIFESTS,
+          Iterables.transform(snapshot.allManifests(DUMMY_FILE_IO), ManifestFile::path),
+          generator);
+      return;
+    }
+
+    // write just the location. manifests should not be embedded in JSON along with a list
+    String fieldName =
+        snapshot.formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE
+            ? ROOT_MANIFEST
+            : MANIFEST_LIST;
+    generator.writeStringField(fieldName, snapshotFile);
   }
 
   public static String toJson(Snapshot snapshot) {
@@ -176,7 +187,24 @@ public class SnapshotParser {
 
     String keyId = JsonUtil.getStringOrNull(KEY_ID, node);
 
-    if (node.has(MANIFEST_LIST)) {
+    if (node.has(ROOT_MANIFEST)) {
+      // v4+ snapshot: uses root-manifest instead of manifest-list
+      String rootManifest = JsonUtil.getString(ROOT_MANIFEST, node);
+      return new BaseSnapshot(
+          4,
+          sequenceNumber,
+          snapshotId,
+          parentId,
+          timestamp,
+          operation,
+          summary,
+          schemaId,
+          rootManifest,
+          firstRowId,
+          addedRows,
+          keyId);
+
+    } else if (node.has(MANIFEST_LIST)) {
       // the manifest list is stored in a manifest list file
       String manifestList = JsonUtil.getString(MANIFEST_LIST, node);
       return new BaseSnapshot(

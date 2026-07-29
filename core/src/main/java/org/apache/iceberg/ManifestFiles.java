@@ -47,6 +47,7 @@ import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.math.IntMath;
+import org.apache.iceberg.types.Types;
 import org.apache.iceberg.util.Pair;
 import org.apache.iceberg.util.PropertyUtil;
 import org.apache.iceberg.util.Tasks;
@@ -164,6 +165,73 @@ public class ManifestFiles {
     return read(manifest, io, specsById, true);
   }
 
+  /**
+   * Reads colocated deletion vectors for a v4+ leaf data manifest as {@link DeleteFile} objects.
+   * Legacy (pre-v4) manifests have no colocated DVs so the returned iterable is empty for them.
+   *
+   * <p>Used by v4+ DV-collapse to identify prior DVs that will be superseded by REPLACED/MODIFIED
+   * pairs.
+   */
+  static CloseableIterable<DeleteFile> readColocatedDVs(
+      ManifestFile manifest, FileIO io, Map<Integer, PartitionSpec> specsById) {
+    Preconditions.checkArgument(
+        manifest.content() == ManifestContent.DATA,
+        "Cannot read colocated deletion vectors from a delete manifest: %s",
+        manifest);
+
+    if (manifest.formatVersion() < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
+      return CloseableIterable.empty();
+    }
+
+    InputFile file = newInputFile(io, manifest);
+    InheritableMetadata inheritableMetadata = InheritableMetadataFactory.fromManifest(manifest);
+    V4ManifestEntryProjector projector =
+        new V4ManifestEntryProjector(
+            file,
+            ManifestContent.DATA,
+            manifest.partitionSpecId(),
+            specsById,
+            inheritableMetadata);
+    CloseableIterable<DeleteFile> dvs = projector.colocatedDVDeleteFiles();
+    // Ownership: the projector registers Parquet read state as closeables. Close it when the
+    // iterable is closed so we don't leak the underlying Parquet row iterator.
+    return CloseableIterable.combine(dvs, projector);
+  }
+
+  /**
+   * Returns colocated DV changes for a v4+ leaf data manifest as {@code (status, DeleteFile)}
+   * pairs: {@link ManifestEntry.Status#ADDED} for newly-live DVs (born-with-DV or DV added/updated)
+   * and {@link ManifestEntry.Status#DELETED} for prior DVs that were superseded (preserved on
+   * REPLACED rows). Legacy (pre-v4) manifests have no colocated DVs and produce an empty iterable.
+   *
+   * <p>Used by {@code SnapshotChanges} and {@code BaseSnapshot} to report v4+ DV changes as
+   * delete-file deltas alongside legacy delete-manifest entries.
+   */
+  static CloseableIterable<Pair<ManifestEntry.Status, DeleteFile>> readColocatedDVChanges(
+      ManifestFile manifest, FileIO io, Map<Integer, PartitionSpec> specsById) {
+    Preconditions.checkArgument(
+        manifest.content() == ManifestContent.DATA,
+        "Cannot read colocated deletion vector changes from a delete manifest: %s",
+        manifest);
+
+    if (manifest.formatVersion() < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
+      return CloseableIterable.empty();
+    }
+
+    InputFile file = newInputFile(io, manifest);
+    InheritableMetadata inheritableMetadata = InheritableMetadataFactory.fromManifest(manifest);
+    V4ManifestEntryProjector projector =
+        new V4ManifestEntryProjector(
+            file,
+            ManifestContent.DATA,
+            manifest.partitionSpecId(),
+            specsById,
+            inheritableMetadata);
+    CloseableIterable<Pair<ManifestEntry.Status, DeleteFile>> changes =
+        projector.colocatedDVChanges();
+    return CloseableIterable.combine(changes, projector);
+  }
+
   static ManifestReader<DataFile> read(
       ManifestFile manifest,
       FileIO io,
@@ -175,6 +243,50 @@ public class ManifestFiles {
         manifest);
     InputFile file = newInputFile(io, manifest);
     InheritableMetadata inheritableMetadata = InheritableMetadataFactory.fromManifest(manifest);
+
+    if (manifest instanceof RootDirectRowsManifestFile) {
+      // Virtual manifest over a promoted root's direct DATA rows. Feed the projector the direct
+      // rows already decoded by RootManifestReader so we don't re-open the root parquet file for
+      // the scan pass. Setting directRowsOnly=true keeps the entry stream filtered to DATA content
+      // (harmless for cached rows since RootManifestReader only cached DATA rows).
+      RootDirectRowsManifestFile virtualManifest = (RootDirectRowsManifestFile) manifest;
+      V4ManifestEntryProjector projector =
+          new V4ManifestEntryProjector(
+              file,
+              ManifestContent.DATA,
+              manifest.partitionSpecId(),
+              specsById,
+              inheritableMetadata,
+              virtualManifest.cachedDirectRows());
+      return new V4ManifestReaderAdapter<>(
+          file,
+          manifest.partitionSpecId(),
+          specsById,
+          projector,
+          ManifestContent.DATA,
+          manifest.firstRowId(),
+          isCommitted,
+          true /* directRowsOnly */);
+    }
+
+    if (manifest.formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
+      V4ManifestEntryProjector projector =
+          new V4ManifestEntryProjector(
+              file,
+              ManifestContent.DATA,
+              manifest.partitionSpecId(),
+              specsById,
+              inheritableMetadata);
+      return new V4ManifestReaderAdapter<>(
+          file,
+          manifest.partitionSpecId(),
+          specsById,
+          projector,
+          ManifestContent.DATA,
+          manifest.firstRowId(),
+          isCommitted);
+    }
+
     return new ManifestReader<>(
         file,
         manifest.partitionSpecId(),
@@ -312,11 +424,60 @@ public class ManifestFiles {
         return new ManifestWriter.V3Writer(
             spec, encryptedOutputFile, snapshotId, firstRowId, writerProperties);
       case 4:
-        return new ManifestWriter.V4Writer(
-            spec, encryptedOutputFile, snapshotId, firstRowId, writerProperties);
+        return V4LeafWriter.forData(
+            spec,
+            spec.partitionType(),
+            encryptedOutputFile,
+            snapshotId,
+            firstRowId,
+            writerProperties);
     }
     throw new UnsupportedOperationException(
         "Cannot write manifest for table version: " + formatVersion);
+  }
+
+  /**
+   * Creates a v4+ leaf data manifest writer with the caller-supplied union partition type. Used by
+   * {@link SnapshotProducer} where the full table union is available; internal callers without the
+   * union (e.g., {@link #write(int, PartitionSpec, OutputFile, Long, Map)} on a single-spec writer)
+   * fall back to {@link #v4UnionPartitionType(int, PartitionSpec)}.
+   */
+  static V4LeafWriter<DataFile> newV4Writer(
+      PartitionSpec spec,
+      Types.StructType unionPartitionType,
+      EncryptedOutputFile encryptedOutputFile,
+      Long snapshotId,
+      Long firstRowId,
+      Map<String, String> writerProperties) {
+    return V4LeafWriter.forData(
+        spec, unionPartitionType, encryptedOutputFile, snapshotId, firstRowId, writerProperties);
+  }
+
+  /**
+   * Creates a v4+ leaf delete manifest writer with the caller-supplied union partition type. See
+   * {@link #newV4Writer} for union-type conventions.
+   */
+  static V4LeafWriter<DeleteFile> newV4DeleteWriter(
+      PartitionSpec spec,
+      Types.StructType unionPartitionType,
+      EncryptedOutputFile encryptedOutputFile,
+      Long snapshotId,
+      Map<String, String> writerProperties) {
+    return V4LeafWriter.forDelete(
+        spec, unionPartitionType, encryptedOutputFile, snapshotId, writerProperties);
+  }
+
+  /**
+   * Returns a v4+ union partition type suitable for a single-spec writer factory. Callers that know
+   * the table's full union type (e.g., {@link SnapshotProducer#newManifestWriter}) pass it directly
+   * to {@link #newV4Writer} / {@link #newV4DeleteWriter}; this helper is for callers that only have
+   * a single {@link PartitionSpec}. For pre-v4 format versions it returns {@code null}.
+   */
+  static Types.StructType v4UnionPartitionType(int formatVersion, PartitionSpec spec) {
+    if (formatVersion < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
+      return null;
+    }
+    return spec.partitionType();
   }
 
   /**
@@ -335,6 +496,23 @@ public class ManifestFiles {
         manifest);
     InputFile file = newInputFile(io, manifest);
     InheritableMetadata inheritableMetadata = InheritableMetadataFactory.fromManifest(manifest);
+
+    if (manifest.formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
+      V4ManifestEntryProjector projector =
+          new V4ManifestEntryProjector(
+              file,
+              ManifestContent.DELETES,
+              manifest.partitionSpecId(),
+              specsById,
+              inheritableMetadata);
+      return new V4ManifestReaderAdapter<>(
+          file,
+          manifest.partitionSpecId(),
+          specsById,
+          projector,
+          ManifestContent.DELETES);
+    }
+
     return new ManifestReader<>(
         file, manifest.partitionSpecId(), specsById, inheritableMetadata, FileType.DELETE_FILES);
   }
@@ -416,7 +594,8 @@ public class ManifestFiles {
       case 3:
         return new ManifestWriter.V3DeleteWriter(spec, outputFile, snapshotId, writerProperties);
       case 4:
-        return new ManifestWriter.V4DeleteWriter(spec, outputFile, snapshotId, writerProperties);
+        return V4LeafWriter.forDelete(
+            spec, spec.partitionType(), outputFile, snapshotId, writerProperties);
     }
     throw new UnsupportedOperationException(
         "Cannot write manifest for table version: " + formatVersion);

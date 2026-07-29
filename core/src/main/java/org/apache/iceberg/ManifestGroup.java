@@ -397,11 +397,41 @@ class ManifestGroup {
         entry -> {
           DataFile dataFile =
               ContentFileUtil.copy(entry.file(), ctx.shouldKeepStats(), ctx.columnsToKeepStats());
-          DeleteFile[] deleteFiles = ctx.deletes().forEntry(entry);
+          // v4 colocated DVs come inline on the ManifestEntry (populated by V4ManifestReader).
+          // The delete-file index only carries legacy standalone delete-manifest content, so skip
+          // the path-keyed lookup when it's empty — pure v4-native scans need no cross-manifest
+          // join, and this also side-steps DeleteFileIndex.forEntry's unconditional
+          // dataSequenceNumber unboxing on entries where the value can be null.
+          DeleteFile[] indexDeletes =
+              ctx.deletes().isEmpty() ? NO_DELETES : ctx.deletes().forEntry(entry);
+          DeleteFile[] deleteFiles = mergeInlineDV(entry.deletionVector(), indexDeletes);
           ScanMetricsUtil.fileTask(ctx.scanMetrics(), dataFile, deleteFiles);
           return new BaseFileScanTask(
               dataFile, deleteFiles, ctx.schemaAsString(), ctx.specAsString(), ctx.residuals());
         });
+  }
+
+  private static final DeleteFile[] NO_DELETES = new DeleteFile[0];
+
+  /**
+   * Prepends a v4+ colocated deletion vector (carried inline on the manifest entry) to the array of
+   * deletes resolved from {@link DeleteFileIndex}. Colocated DVs bypass DeleteFileIndex because
+   * they are already keyed to a specific data file by physical row colocation — the index's
+   * path-keyed lookup is only needed for legacy standalone delete manifests (position or equality).
+   */
+  private static DeleteFile[] mergeInlineDV(DeleteFile inlineDV, DeleteFile[] indexDeletes) {
+    if (inlineDV == null) {
+      return indexDeletes;
+    }
+
+    if (indexDeletes == null || indexDeletes.length == 0) {
+      return new DeleteFile[] {inlineDV};
+    }
+
+    DeleteFile[] merged = new DeleteFile[indexDeletes.length + 1];
+    merged[0] = inlineDV;
+    System.arraycopy(indexDeletes, 0, merged, 1, indexDeletes.length);
+    return merged;
   }
 
   @FunctionalInterface

@@ -61,7 +61,7 @@ public abstract class ManifestWriter<F extends ContentFile<F>> implements FileAp
   private long deletedRows = 0L;
   private Long minDataSequenceNumber = null;
 
-  private ManifestWriter(
+  ManifestWriter(
       PartitionSpec spec,
       EncryptedOutputFile file,
       Long snapshotId,
@@ -106,6 +106,16 @@ public abstract class ManifestWriter<F extends ContentFile<F>> implements FileAp
 
   protected ManifestContent content() {
     return ManifestContent.DATA;
+  }
+
+  /** Returns the writer's snapshot id, for use by v4+ subclasses that build TrackingStructs. */
+  protected Long writerSnapshotId() {
+    return snapshotId;
+  }
+
+  /** Returns the writer's reusable {@link ManifestEntry} wrapper, for use by v4+ subclasses. */
+  protected GenericManifestEntry<F> reusedEntry() {
+    return reused;
   }
 
   void addEntry(ManifestEntry<F> entry) {
@@ -209,6 +219,51 @@ public abstract class ManifestWriter<F extends ContentFile<F>> implements FileAp
     // Use the current Snapshot ID for the delete. It is safe to delete the data file from disk
     // when this Snapshot has been removed or when there are no Snapshots older than this one.
     addEntry(reused.wrapDelete(snapshotId, entry));
+  }
+
+  /**
+   * Add a data file born with a colocated {@link DeletionVector} in the same commit as a single
+   * ADDED entry.
+   *
+   * <p>Only meaningful for v4+ data manifests; non-v4+ writers throw {@link
+   * UnsupportedOperationException}.
+   */
+  void addWithDV(DataFile addedFile, DeletionVector dv) {
+    throw new UnsupportedOperationException(
+        "Colocated deletion vectors require a v4 manifest writer; use V4LeafWriter");
+  }
+
+  /**
+   * Write an entry marking the prior state of a data file in a v4+ REPLACED/MODIFIED pair.
+   *
+   * <p>Only meaningful for v4+ data manifests; non-v4+ writers throw {@link
+   * UnsupportedOperationException}. The pair must be followed immediately by a {@link
+   * #modifiedEntry(ManifestEntry, DeletionVector)} call for the same data file.
+   *
+   * @param entry the manifest entry for the data file in its prior live state
+   * @param priorDv the deletion vector attached to the data file before this commit, or null if the
+   *     prior state had no DV. Preserving the prior DV on the REPLACED row lets readers (e.g.
+   *     {@code SnapshotChanges.removedDeleteFiles}) identify the DV that was superseded by the
+   *     paired MODIFIED row without consulting the parent manifest.
+   */
+  void replacedEntry(ManifestEntry<F> entry, DeletionVector priorDv) {
+    throw new UnsupportedOperationException(
+        "REPLACED entries require a v4 manifest writer; use V4LeafWriter");
+  }
+
+  /**
+   * Write an entry marking the new live state of a data file in a v4+ REPLACED/MODIFIED pair.
+   *
+   * <p>Only meaningful for v4+ data manifests; non-v4+ writers throw {@link
+   * UnsupportedOperationException}. Must follow a {@link #replacedEntry(ManifestEntry,
+   * DeletionVector)} call for the same data file.
+   *
+   * @param entry the manifest entry for the data file
+   * @param dv the new deletion vector to attach to the MODIFIED entry
+   */
+  void modifiedEntry(ManifestEntry<F> entry, DeletionVector dv) {
+    throw new UnsupportedOperationException(
+        "MODIFIED entries require a v4 manifest writer; use V4LeafWriter");
   }
 
   @Override

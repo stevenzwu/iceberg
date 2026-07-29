@@ -32,6 +32,7 @@ class GenericManifestEntry<F extends ContentFile<F>>
   private Long dataSequenceNumber = null;
   private Long fileSequenceNumber = null;
   private F file = null;
+  private DeleteFile deletionVector = null;
 
   GenericManifestEntry(org.apache.avro.Schema schema) {
     this.schema = schema;
@@ -49,6 +50,8 @@ class GenericManifestEntry<F extends ContentFile<F>>
     this.dataSequenceNumber = toCopy.dataSequenceNumber;
     this.fileSequenceNumber = toCopy.fileSequenceNumber;
     this.file = toCopy.file().copy(fullCopy);
+    this.deletionVector =
+        toCopy.deletionVector == null ? null : toCopy.deletionVector.copy(fullCopy);
   }
 
   ManifestEntry<F> wrapExisting(ManifestEntry<F> entry) {
@@ -63,6 +66,7 @@ class GenericManifestEntry<F extends ContentFile<F>>
     this.dataSequenceNumber = newDataSequenceNumber;
     this.fileSequenceNumber = newFileSequenceNumber;
     this.file = newFile;
+    this.deletionVector = null;
     return this;
   }
 
@@ -76,6 +80,22 @@ class GenericManifestEntry<F extends ContentFile<F>>
     this.dataSequenceNumber = newDataSequenceNumber;
     this.fileSequenceNumber = null;
     this.file = Delegates.suppressFirstRowId(newFile);
+    this.deletionVector = null;
+    return this;
+  }
+
+  /**
+   * Wraps a newly added file without suppressing {@code firstRowId}. Used by v4+ readers that store
+   * {@code firstRowId} per-entry in the tracking struct rather than at manifest level.
+   */
+  ManifestEntry<F> wrapAppendPreservingFirstRowId(
+      Long newSnapshotId, Long newDataSequenceNumber, F newFile) {
+    this.status = Status.ADDED;
+    this.snapshotId = newSnapshotId;
+    this.dataSequenceNumber = newDataSequenceNumber;
+    this.fileSequenceNumber = null;
+    this.file = newFile;
+    this.deletionVector = null;
     return this;
   }
 
@@ -91,6 +111,7 @@ class GenericManifestEntry<F extends ContentFile<F>>
     this.dataSequenceNumber = newDataSequenceNumber;
     this.fileSequenceNumber = newFileSequenceNumber;
     this.file = newFile;
+    this.deletionVector = null;
     return this;
   }
 
@@ -126,6 +147,15 @@ class GenericManifestEntry<F extends ContentFile<F>>
   @Override
   public F file() {
     return file;
+  }
+
+  @Override
+  public DeleteFile deletionVector() {
+    return deletionVector;
+  }
+
+  void setDeletionVector(DeleteFile newDeletionVector) {
+    this.deletionVector = newDeletionVector;
   }
 
   @Override
@@ -223,6 +253,7 @@ class GenericManifestEntry<F extends ContentFile<F>>
         .add("data_sequence_number", dataSequenceNumber)
         .add("file_sequence_number", fileSequenceNumber)
         .add("file", file)
+        .add("deletion_vector", deletionVector)
         .toString();
   }
 }
