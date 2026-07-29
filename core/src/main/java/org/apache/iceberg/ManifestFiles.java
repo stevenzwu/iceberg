@@ -43,6 +43,7 @@ import org.apache.iceberg.io.OutputFile;
 import org.apache.iceberg.metrics.CacheMetricsReport;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
+import org.apache.iceberg.types.Types;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
@@ -175,6 +176,21 @@ public class ManifestFiles {
         manifest);
     InputFile file = newInputFile(io, manifest);
     InheritableMetadata inheritableMetadata = InheritableMetadataFactory.fromManifest(manifest);
+
+    if (manifest.formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
+      V4ManifestReader v4Reader =
+          V4ManifestReader.forData(
+              file, manifest.partitionSpecId(), specsById, inheritableMetadata);
+      return new V4ManifestReaderAdapter<>(
+          file,
+          manifest.partitionSpecId(),
+          specsById,
+          v4Reader,
+          ManifestContent.DATA,
+          manifest.firstRowId(),
+          isCommitted);
+    }
+
     return new ManifestReader<>(
         file,
         manifest.partitionSpecId(),
@@ -312,11 +328,61 @@ public class ManifestFiles {
         return new ManifestWriter.V3Writer(
             spec, encryptedOutputFile, snapshotId, firstRowId, writerProperties);
       case 4:
+        // TODO(Phase 6+): route through V4LeafWriter once MergingSnapshotProducer collapses DVs
+        // into data manifests (born-with-DV + REPLACED/MODIFIED pairs). Without that collapse,
+        // standalone POSITION_DELETES DVs reach V4LeafWriter.forDelete's EqualityDeleteTrackedFile
+        // adapter which rejects them per v4 spec. Until Phase 6+ lands, the commit path routes v4
+        // leaves through the legacy V4Writer (manifest_entry format) so they round-trip through
+        // v3-style manifest lists and existing DV tests keep working.
         return new ManifestWriter.V4Writer(
             spec, encryptedOutputFile, snapshotId, firstRowId, writerProperties);
     }
     throw new UnsupportedOperationException(
         "Cannot write manifest for table version: " + formatVersion);
+  }
+
+  /**
+   * Creates a v4+ leaf data manifest writer with the caller-supplied union partition type. Used by
+   * {@link SnapshotProducer} where the full table union is available; internal callers without the
+   * union (e.g., {@link #write(int, PartitionSpec, OutputFile, Long, Map)} on a single-spec writer)
+   * fall back to {@link #v4UnionPartitionType(int, PartitionSpec)}.
+   */
+  static V4LeafWriter<DataFile> newV4Writer(
+      PartitionSpec spec,
+      Types.StructType unionPartitionType,
+      EncryptedOutputFile encryptedOutputFile,
+      Long snapshotId,
+      Long firstRowId,
+      Map<String, String> writerProperties) {
+    return V4LeafWriter.forData(
+        spec, unionPartitionType, encryptedOutputFile, snapshotId, firstRowId, writerProperties);
+  }
+
+  /**
+   * Creates a v4+ leaf delete manifest writer with the caller-supplied union partition type. See
+   * {@link #newV4Writer} for union-type conventions.
+   */
+  static V4LeafWriter<DeleteFile> newV4DeleteWriter(
+      PartitionSpec spec,
+      Types.StructType unionPartitionType,
+      EncryptedOutputFile encryptedOutputFile,
+      Long snapshotId,
+      Map<String, String> writerProperties) {
+    return V4LeafWriter.forDelete(
+        spec, unionPartitionType, encryptedOutputFile, snapshotId, writerProperties);
+  }
+
+  /**
+   * Returns a v4+ union partition type suitable for a single-spec writer factory. Callers that
+   * know the table's full union type (e.g., {@link SnapshotProducer#newManifestWriter}) pass it
+   * directly to {@link #newV4Writer} / {@link #newV4DeleteWriter}; this helper is for callers that
+   * only have a single {@link PartitionSpec}. For pre-v4 format versions it returns {@code null}.
+   */
+  static Types.StructType v4UnionPartitionType(int formatVersion, PartitionSpec spec) {
+    if (formatVersion < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
+      return null;
+    }
+    return spec.partitionType();
   }
 
   /**
@@ -335,6 +401,15 @@ public class ManifestFiles {
         manifest);
     InputFile file = newInputFile(io, manifest);
     InheritableMetadata inheritableMetadata = InheritableMetadataFactory.fromManifest(manifest);
+
+    if (manifest.formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
+      V4ManifestReader v4Reader =
+          V4ManifestReader.forDelete(
+              file, manifest.partitionSpecId(), specsById, inheritableMetadata);
+      return new V4ManifestReaderAdapter<>(
+          file, manifest.partitionSpecId(), specsById, v4Reader, ManifestContent.DELETES);
+    }
+
     return new ManifestReader<>(
         file, manifest.partitionSpecId(), specsById, inheritableMetadata, FileType.DELETE_FILES);
   }
@@ -416,6 +491,7 @@ public class ManifestFiles {
       case 3:
         return new ManifestWriter.V3DeleteWriter(spec, outputFile, snapshotId, writerProperties);
       case 4:
+        // See newWriter case 4 TODO — legacy V4DeleteWriter until Phase 6+ DV collapse logic lands.
         return new ManifestWriter.V4DeleteWriter(spec, outputFile, snapshotId, writerProperties);
     }
     throw new UnsupportedOperationException(

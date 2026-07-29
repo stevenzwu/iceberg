@@ -61,7 +61,7 @@ public abstract class ManifestWriter<F extends ContentFile<F>> implements FileAp
   private long deletedRows = 0L;
   private Long minDataSequenceNumber = null;
 
-  private ManifestWriter(
+  ManifestWriter(
       PartitionSpec spec,
       EncryptedOutputFile file,
       Long snapshotId,
@@ -106,6 +106,16 @@ public abstract class ManifestWriter<F extends ContentFile<F>> implements FileAp
 
   protected ManifestContent content() {
     return ManifestContent.DATA;
+  }
+
+  /** Returns the writer's snapshot id, for use by v4+ subclasses that build TrackingStructs. */
+  protected Long writerSnapshotId() {
+    return snapshotId;
+  }
+
+  /** Returns the writer's reusable {@link ManifestEntry} wrapper, for use by v4+ subclasses. */
+  protected GenericManifestEntry<F> reusedEntry() {
+    return reused;
   }
 
   void addEntry(ManifestEntry<F> entry) {

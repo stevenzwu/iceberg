@@ -301,6 +301,10 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
 
     List<ManifestFile> manifests = apply(base, parentSnapshot);
 
+    // TODO(Phase 6+): dispatch to applyV4() for base.formatVersion() >= 4 once
+    // MergingSnapshotProducer collapses DVs (born-with-DV + REPLACED/MODIFIED pairs). Until then,
+    // v4 tables commit through the v3-style manifest-list path.
+
     OutputFile manifestList = manifestListPath();
 
     ManifestListWriter writer =
@@ -367,6 +371,7 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
         assignedRows,
         writer.toManifestListFile().encryptionKeyID());
   }
+
 
   private void runValidations(Snapshot parentSnapshot) {
     validate(base, parentSnapshot);
@@ -545,9 +550,14 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
             cleanUncommitted(Sets.newHashSet(saved.allManifests(ops.io())));
           }
 
-          // also clean up unused manifest lists created by multiple attempts
+          // also clean up unused manifest lists (or root manifests for v4) created by multiple
+          // attempts. For v4, manifestListLocation() is null; use rootManifestLocation() instead.
+          String committedLocation =
+              saved.manifestListLocation() != null
+                  ? saved.manifestListLocation()
+                  : saved.rootManifestLocation();
           for (String manifestList : manifestLists) {
-            if (!saved.manifestListLocation().equals(manifestList)) {
+            if (!manifestList.equals(committedLocation)) {
               deleteFile(manifestList);
             }
           }
