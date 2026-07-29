@@ -245,6 +245,74 @@ class V4LeafWriter<F extends ContentFile<F>> extends ManifestWriter<F> {
     delete(entry.file(), entry.dataSequenceNumber(), entry.fileSequenceNumber());
   }
 
+  // ---- v4 DV-on-write ------------------------------------------------------
+
+  /**
+   * Adds a data file born with a colocated DV in the same commit as a single ADDED entry. Only
+   * valid on data manifests; callers reach this via a {@code V4LeafWriter<?>} cast.
+   */
+  @Override
+  void addWithDV(DataFile addedFile, DeletionVector dv) {
+    org.apache.iceberg.relocated.com.google.common.base.Preconditions.checkState(
+        dataAdapter != null, "addWithDV is only supported for data leaf manifests");
+    Long snapshotId = writerSnapshotId();
+    Tracking tracking =
+        new TrackingStruct(
+            EntryStatus.ADDED,
+            snapshotId,
+            null,
+            null,
+            snapshotId,
+            addedFile.firstRowId(),
+            null,
+            null);
+    core.add(dataAdapter.wrap(addedFile, tracking, dv));
+  }
+
+  /**
+   * Writes the prior state of a data file in a v4+ REPLACED/MODIFIED pair. Preserves the prior DV
+   * when present so downstream change-detection can identify the DV that was superseded by the
+   * paired MODIFIED row.
+   */
+  @Override
+  @SuppressWarnings("unchecked")
+  void replacedEntry(ManifestEntry<F> entry, DeletionVector priorDv) {
+    org.apache.iceberg.relocated.com.google.common.base.Preconditions.checkState(
+        dataAdapter != null, "replacedEntry is only supported for data leaf manifests");
+    Long snapshotId = writerSnapshotId() != null ? writerSnapshotId() : 0L;
+    Tracking tracking =
+        new TrackingStruct(
+            EntryStatus.REPLACED,
+            snapshotId,
+            entry.dataSequenceNumber(),
+            entry.fileSequenceNumber(),
+            null,
+            entry.file().firstRowId(),
+            null,
+            null);
+    core.add(dataAdapter.wrap((DataFile) entry.file(), tracking, priorDv));
+  }
+
+  /** Writes the new live state of a data file in a v4+ REPLACED/MODIFIED pair with the new DV. */
+  @Override
+  @SuppressWarnings("unchecked")
+  void modifiedEntry(ManifestEntry<F> entry, DeletionVector dv) {
+    org.apache.iceberg.relocated.com.google.common.base.Preconditions.checkState(
+        dataAdapter != null, "modifiedEntry is only supported for data leaf manifests");
+    Long dvSnapshotId = writerSnapshotId() != null ? writerSnapshotId() : 0L;
+    Tracking tracking =
+        new TrackingStruct(
+            EntryStatus.MODIFIED,
+            entry.snapshotId(),
+            entry.dataSequenceNumber(),
+            entry.fileSequenceNumber(),
+            dvSnapshotId,
+            entry.file().firstRowId(),
+            null,
+            null);
+    core.add(dataAdapter.wrap((DataFile) entry.file(), tracking, dv));
+  }
+
   @SuppressWarnings("unchecked")
   private TrackedFile wrapContentFile(F file, Tracking tracking) {
     if (dataAdapter != null) {

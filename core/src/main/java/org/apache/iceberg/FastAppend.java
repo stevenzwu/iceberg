@@ -207,6 +207,21 @@ class FastAppend extends SnapshotProducer<AppendFiles> implements AppendFiles {
       newManifests.clear();
     }
 
+    // v4 adaptive-tree path: route new DataFiles as TrackedFile rows into the accumulator input
+    // channel instead of writing per-spec leaf manifests up front. The commit's applyV4 drain
+    // decides whether each row lands as a root direct row (below the per-leaf target) or spills
+    // into a leaf-manifest-entry — no small-write leaf is materialized for below-target commits.
+    if (adaptiveTreeEnabled()
+        && ops().current().formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE
+        && !newDataFilesBySpec.isEmpty()) {
+      injectV4AdaptiveDataFiles(
+          Iterables.concat(newDataFilesBySpec.values()),
+          null /* inherit data seq */,
+          null /* FastAppend never carries DVs */);
+      hasNewFiles = false;
+      return newManifests;
+    }
+
     if (newManifests.isEmpty() && !newDataFilesBySpec.isEmpty()) {
       newDataFilesBySpec.forEach(
           (specId, dataFiles) -> newManifests.addAll(writeDataManifests(dataFiles, spec(specId))));

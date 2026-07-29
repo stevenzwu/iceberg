@@ -343,6 +343,34 @@ class BaseSnapshot implements Snapshot {
       }
     }
 
+    // v4+ colocated DVs live on data manifests' ADDED/MODIFIED rows (newly-live DVs) and REPLACED
+    // rows (superseded DVs preserved by V4LeafWriter.replacedEntry). Scan data manifests written
+    // by this snapshot to surface those DV changes as delete-file deltas. Legacy data manifests
+    // produce an empty iterable from readColocatedDVChanges, so this scan is a no-op for v1-v3.
+    Iterable<ManifestFile> changedDataManifests =
+        Iterables.filter(
+            dataManifests(fileIO), manifest -> Objects.equal(manifest.snapshotId(), snapshotId));
+    for (ManifestFile manifest : changedDataManifests) {
+      try (org.apache.iceberg.io.CloseableIterable<
+              org.apache.iceberg.util.Pair<ManifestEntry.Status, DeleteFile>>
+          changes = ManifestFiles.readColocatedDVChanges(manifest, fileIO, null)) {
+        for (org.apache.iceberg.util.Pair<ManifestEntry.Status, DeleteFile> pair : changes) {
+          switch (pair.first()) {
+            case ADDED:
+              adds.add(pair.second());
+              break;
+            case DELETED:
+              deletes.add(pair.second());
+              break;
+            default:
+              // No other statuses surface from readColocatedDVChanges.
+          }
+        }
+      } catch (IOException e) {
+        throw new UncheckedIOException("Failed to close manifest reader", e);
+      }
+    }
+
     this.addedDeleteFiles = adds.build();
     this.removedDeleteFiles = deletes.build();
   }
@@ -357,23 +385,49 @@ class BaseSnapshot implements Snapshot {
     Iterable<ManifestFile> changedManifests =
         Iterables.filter(
             dataManifests(fileIO), manifest -> Objects.equal(manifest.snapshotId(), snapshotId));
-    try (CloseableIterable<ManifestEntry<DataFile>> entries =
-        new ManifestGroup(fileIO, changedManifests).ignoreExisting().entries()) {
-      for (ManifestEntry<DataFile> entry : entries) {
-        switch (entry.status()) {
-          case ADDED:
-            adds.add(entry.file().copy());
-            break;
-          case DELETED:
-            deletes.add(entry.file().copyWithoutStats());
-            break;
-          default:
-            throw new IllegalStateException(
-                "Unexpected entry status, not added or deleted: " + entry);
+    for (ManifestFile manifest : changedManifests) {
+      // v4+ leaves (content_entry schema) carry REPLACED/MODIFIED rows that the legacy reader
+      // collapses to DELETED/EXISTING. Route v4+ manifests through readDataFileChanges so REPLACED
+      // (a DV-state transition) is not mis-classified as a data-file removal.
+      if (ManifestFiles.isV4ContentEntryManifest(manifest, fileIO)) {
+        try (org.apache.iceberg.io.CloseableIterable<
+                org.apache.iceberg.util.Pair<ManifestEntry.Status, DataFile>>
+            changes = ManifestFiles.readDataFileChanges(manifest, fileIO, null)) {
+          for (org.apache.iceberg.util.Pair<ManifestEntry.Status, DataFile> change : changes) {
+            switch (change.first()) {
+              case ADDED:
+                adds.add(change.second().copy());
+                break;
+              case DELETED:
+                deletes.add(change.second().copyWithoutStats());
+                break;
+              default:
+                // No other statuses surface from readDataFileChanges.
+            }
+          }
+        } catch (IOException e) {
+          throw new RuntimeIOException(e, "Failed to close entries while caching changes");
+        }
+      } else {
+        try (CloseableIterable<ManifestEntry<DataFile>> entries =
+            new ManifestGroup(fileIO, ImmutableList.of(manifest)).ignoreExisting().entries()) {
+          for (ManifestEntry<DataFile> entry : entries) {
+            switch (entry.status()) {
+              case ADDED:
+                adds.add(entry.file().copy());
+                break;
+              case DELETED:
+                deletes.add(entry.file().copyWithoutStats());
+                break;
+              default:
+                throw new IllegalStateException(
+                    "Unexpected entry status, not added or deleted: " + entry);
+            }
+          }
+        } catch (IOException e) {
+          throw new RuntimeIOException(e, "Failed to close entries while caching changes");
         }
       }
-    } catch (IOException e) {
-      throw new RuntimeIOException(e, "Failed to close entries while caching changes");
     }
 
     this.addedDataFiles = adds.build();

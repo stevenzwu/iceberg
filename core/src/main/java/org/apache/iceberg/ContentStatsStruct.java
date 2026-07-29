@@ -49,7 +49,10 @@ class ContentStatsStruct implements ContentStats, StructLike, Serializable {
       }
     } else {
       for (Map.Entry<Integer, FieldStats<?>> entry : toCopy.idToFieldStats.entrySet()) {
-        idToFieldStats.put(entry.getKey(), entry.getValue().copy());
+        FieldStats<?> value = entry.getValue();
+        if (value != null) {
+          idToFieldStats.put(entry.getKey(), value.copy());
+        }
       }
     }
   }

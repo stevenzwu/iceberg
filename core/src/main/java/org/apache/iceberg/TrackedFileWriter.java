@@ -271,30 +271,34 @@ class TrackedFileWriter implements FileAppender<TrackedFile> {
     }
   }
 
-  // ---- Root role convenience -------------------------------------------------
+  // ---- Root-role convenience + role-agnostic manifest-reference add ---------
 
   /**
-   * Adds a manifest reference entry with {@link EntryStatus#ADDED}. Root role only. The output's
-   * {@code format_version} is read from {@link ManifestFile#formatVersion()}: producers of v4+ leaf
-   * manifests set it to {@code 4}; legacy v1-v3 manifests carried over during a v3-to-v4 upgrade
-   * default to {@code 0}.
+   * Adds a manifest reference entry with {@link EntryStatus#ADDED}, using this writer's own root
+   * state. Root role only. Callers wanting to append manifest-reference rows to a non-root writer
+   * (e.g., promoting a still-open leaf writer to root) call {@link #addManifestEntry(ManifestFile,
+   * EntryStatus, RootState)} directly with a caller-owned {@link RootState}.
    */
   void add(ManifestFile manifest) {
-    addManifestEntry(manifest, EntryStatus.ADDED);
+    Preconditions.checkState(root != null, "add(ManifestFile) is only supported for the root role");
+    addManifestEntry(manifest, EntryStatus.ADDED, root);
   }
 
   /**
-   * Adds a manifest reference entry with an explicit entry status. Root role only. Use {@link
-   * EntryStatus#EXISTING} for manifests carried over unchanged from the previous snapshot, and
-   * {@link EntryStatus#ADDED} for manifests newly written in this snapshot.
+   * Adds a manifest reference entry with an explicit entry status, using this writer's own root
+   * state. Root role only. Use {@link EntryStatus#EXISTING} for manifests carried over unchanged
+   * from the previous snapshot, and {@link EntryStatus#ADDED} for manifests newly written in this
+   * snapshot.
    */
   void add(ManifestFile manifest, EntryStatus status) {
-    addManifestEntry(manifest, status);
+    Preconditions.checkState(
+        root != null, "add(ManifestFile, EntryStatus) is only supported for the root role");
+    addManifestEntry(manifest, status, root);
   }
 
   /**
    * Convenience method to add all manifests from an iterable. Renamed from {@code addAll} to avoid
-   * a type-erasure clash with {@link FileAppender#addAll(Iterable)}.
+   * a type-erasure clash with {@link FileAppender#addAll(Iterable)}. Root role only.
    */
   void addAllManifests(Iterable<ManifestFile> manifests) {
     for (ManifestFile manifest : manifests) {
@@ -302,19 +306,34 @@ class TrackedFileWriter implements FileAppender<TrackedFile> {
     }
   }
 
-  private void addManifestEntry(ManifestFile manifest, EntryStatus status) {
-    Preconditions.checkState(root != null, "add(ManifestFile) is only supported for the root role");
-    ManifestFile resolved = assignSequenceNumber(manifest);
-    Long firstRowId = resolveFirstRowId(resolved);
-    root.trackedFile.wrap(resolved, status, firstRowId);
-    appender.add((StructLike) root.trackedFile);
+  /**
+   * Appends a manifest-reference row to the underlying appender using the given {@link RootState}
+   * for sequence-number and first-row-id resolution. Works on any role, so callers can promote a
+   * leaf-role writer to root by appending refs + retirement rows to a still-open leaf writer
+   * before closing it. The refs' output on-disk shape matches the writer's schema (both root and
+   * leaf writers accept null-stats manifest-reference rows into their full stats schema).
+   *
+   * <p>The provided {@code refState} carries the reusable {@link
+   * TrackedFileAdapters.ManifestTrackedFile} wrapper, the commit's snapshot-id / sequence-number
+   * used to resolve {@link ManifestWriter#UNASSIGNED_SEQ}, and the running {@code nextRowId}
+   * counter used to assign first-row-ids to freshly-written DATA manifests. The state is mutated
+   * in place as row-ids are assigned.
+   */
+  void addManifestEntry(ManifestFile manifest, EntryStatus status, RootState refState) {
+    Preconditions.checkArgument(refState != null, "Invalid manifest-ref state: null");
+    ManifestFile resolved = assignSequenceNumber(manifest, refState);
+    Long firstRowId = resolveFirstRowId(resolved, refState);
+    refState.trackedFile.wrap(resolved, status, firstRowId);
+    appender.add((StructLike) refState.trackedFile);
   }
 
   /**
    * Resolves {@code UNASSIGNED_SEQ} on a freshly written leaf manifest so the root manifest entry
-   * sees concrete sequence numbers.
+   * sees concrete sequence numbers. Uses the caller-provided {@code refState}'s commit
+   * snapshot-id / sequence-number rather than this writer's own root state, so a leaf-role writer
+   * can also resolve refs during promotion.
    */
-  private ManifestFile assignSequenceNumber(ManifestFile manifest) {
+  private static ManifestFile assignSequenceNumber(ManifestFile manifest, RootState refState) {
     long seq = manifest.sequenceNumber();
     long minSeq = manifest.minSequenceNumber();
     if (seq != ManifestWriter.UNASSIGNED_SEQ && minSeq != ManifestWriter.UNASSIGNED_SEQ) {
@@ -322,19 +341,19 @@ class TrackedFileWriter implements FileAppender<TrackedFile> {
     }
 
     Preconditions.checkState(
-        manifest.snapshotId() != null && manifest.snapshotId() == root.commitSnapshotId,
+        manifest.snapshotId() != null && manifest.snapshotId() == refState.commitSnapshotId,
         "Found unassigned sequence number for a manifest from snapshot: %s",
         manifest.snapshotId());
 
-    long resolvedSeq = seq == ManifestWriter.UNASSIGNED_SEQ ? root.commitSequenceNumber : seq;
+    long resolvedSeq = seq == ManifestWriter.UNASSIGNED_SEQ ? refState.commitSequenceNumber : seq;
     long resolvedMinSeq =
-        minSeq == ManifestWriter.UNASSIGNED_SEQ ? root.commitSequenceNumber : minSeq;
+        minSeq == ManifestWriter.UNASSIGNED_SEQ ? refState.commitSequenceNumber : minSeq;
     return GenericManifestFile.copyOf(manifest)
         .withSequenceNumbers(resolvedSeq, resolvedMinSeq)
         .build();
   }
 
-  private Long resolveFirstRowId(ManifestFile manifest) {
+  private static Long resolveFirstRowId(ManifestFile manifest, RootState refState) {
     if (manifest.content() != ManifestContent.DATA) {
       return null;
     }
@@ -344,14 +363,25 @@ class TrackedFileWriter implements FileAppender<TrackedFile> {
     }
 
     Preconditions.checkState(
-        root.nextRowId != null,
+        refState.nextRowId != null,
         "Cannot assign first-row-id for DATA manifest without a snapshot first-row-id: %s",
         manifest.path());
-    long assigned = root.nextRowId;
+    long assigned = refState.nextRowId;
     long existingRows = manifest.existingRowsCount() != null ? manifest.existingRowsCount() : 0L;
     long addedRows = manifest.addedRowsCount() != null ? manifest.addedRowsCount() : 0L;
-    root.nextRowId = assigned + existingRows + addedRows;
+    refState.nextRowId = assigned + existingRows + addedRows;
     return assigned;
+  }
+
+  /**
+   * Returns a reference-only {@link RootState} suitable for callers that want to append manifest
+   * references to a writer of any role (e.g., promoting a leaf writer to root). Encryption fields
+   * are null since this state is only consulted by {@link #addManifestEntry(ManifestFile,
+   * EntryStatus, RootState)}, not by root-only paths like {@link #toRootManifestFile()}.
+   */
+  static RootState refOnlyState(
+      long commitSnapshotId, long commitSequenceNumber, Long initialNextRowId) {
+    return new RootState(null, null, commitSnapshotId, commitSequenceNumber, initialNextRowId);
   }
 
   /** Returns metadata about this root manifest file so callers can build a snapshot referring to it. */
@@ -537,8 +567,19 @@ class TrackedFileWriter implements FileAppender<TrackedFile> {
 
   // ---- State ------------------------------------------------------------------
 
-  /** State for the root role: encryption bits, the reference wrapper, and the first-row-id counter. */
-  private static final class RootState {
+  /**
+   * State passed to {@link #addManifestEntry(ManifestFile, EntryStatus, RootState)} so the write
+   * path is decoupled from a specific writer instance's role. Root-role writers own their own
+   * {@code RootState} instance; other callers (e.g., leaf-writer promotion) construct one via
+   * {@link #refOnlyState(long, long, Long)}.
+   *
+   * <p>Carries the reusable manifest-reference wrapper, the commit's snapshot-id and
+   * sequence-number for {@link ManifestWriter#UNASSIGNED_SEQ} resolution, the running
+   * {@code nextRowId} counter used to assign first-row-ids to freshly-written DATA manifests
+   * (mutated in place), and root-only encryption fields used by {@link #toRootManifestFile()}
+   * (null for ref-only states).
+   */
+  static final class RootState {
     private final StandardEncryptionManager standardEncryptionManager;
     private final NativeEncryptionKeyMetadata keyMetadata;
     private final TrackedFileAdapters.ManifestTrackedFile trackedFile =

@@ -1481,6 +1481,15 @@ public class TestMergeAppend extends TestBase {
 
   @TestTemplate
   public void testManifestEntryFieldIdsForChangedPartitionSpecForV1Table() {
+    // This test rebuilds a spec with PartitionSpec.builderFor(...), re-allocating partition field
+    // id
+    // 1000 for a different source column than the original spec. v1/v2/v3 write separate per-spec
+    // manifests and never build a cross-spec union, so the collision is invisible. v4+ builds a
+    // single union partition type across all live specs and rejects the collision. Production
+    // UpdatePartitionSpec preserves partition field ids, so the collision is unreachable on real
+    // tables — skip v4+ here (mirrors testManifestReaderWithUpdatedPartitionMetadataForV1Table).
+    assumeThat(formatVersion).isLessThan(4);
+
     Snapshot snap = commit(table, table.newAppend().appendFile(FILE_A), branch);
 
     long commitId = snap.snapshotId();

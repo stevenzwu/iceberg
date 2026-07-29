@@ -95,6 +95,11 @@ abstract class ManifestFilterManager<F extends ContentFile<F>> {
   private final Map<ManifestFile, Pair<Set<F>, Integer>> filteredManifestResults =
       Maps.newConcurrentMap();
 
+  // source manifests whose rows were unpacked and routed through the v4 adaptive-tree accumulator
+  // instead of being rewritten as a new leaf. These manifests must be excluded from the caller's
+  // downstream leaf-manifest set so they do not also flow through as external leaf references.
+  private final Set<ManifestFile> v4ConsumedManifests = Sets.newConcurrentHashSet();
+
   private final Supplier<ExecutorService> workerPoolSupplier;
 
   protected ManifestFilterManager(
@@ -112,6 +117,36 @@ abstract class ManifestFilterManager<F extends ContentFile<F>> {
   protected abstract ManifestReader<F> newManifestReader(ManifestFile manifest);
 
   protected abstract Set<F> newFileSet();
+
+  /**
+   * Returns {@code true} when this filter manager should route filtered rows into the v4
+   * adaptive-tree accumulator instead of writing a rewritten leaf manifest. Subclasses that
+   * participate in the v4 adaptive-tree write path override this to consult the table's format
+   * version and adaptive-tree flag; the base implementation returns {@code false}.
+   */
+  protected boolean isV4AdaptiveMode() {
+    return false;
+  }
+
+  /**
+   * Routes a single {@link ManifestEntry} unpacked from a filtered source manifest through the v4
+   * adaptive-tree accumulator with the given {@code targetStatus} (DELETED for retirement rows,
+   * EXISTING for survivors from a partial filter). Only called when {@link #isV4AdaptiveMode()}
+   * returns true; the base implementation throws.
+   */
+  protected void routeV4AdaptiveEntry(
+      ManifestEntry<F> entry, EntryStatus targetStatus, Schema tableSchema) {
+    throw new UnsupportedOperationException(
+        "v4 adaptive routing is not supported by this filter manager");
+  }
+
+  /**
+   * Called when this filter manager's cache is invalidated (typically because the caller registered
+   * new file/expression deletes after a previous filter pass). Subclasses on the v4 adaptive-tree
+   * path override to clear the accumulator's retirement input buffer so the routed rows from the
+   * invalidated pass are not replayed alongside the fresh routing.
+   */
+  protected void resetV4AdaptiveState() {}
 
   protected void failAnyDelete() {
     this.failAnyDelete = true;
@@ -328,6 +363,16 @@ abstract class ManifestFilterManager<F extends ContentFile<F>> {
   }
 
   /**
+   * Returns the source manifests whose rows were routed through the v4 adaptive-tree accumulator
+   * instead of being rewritten as a new leaf. Callers on the v4 write path exclude these from the
+   * downstream leaf-manifest set so a consumed source manifest does not also flow through as an
+   * external leaf reference alongside the routed rows.
+   */
+  Set<ManifestFile> v4ConsumedManifests() {
+    return v4ConsumedManifests;
+  }
+
+  /**
    * Deletes filtered manifests that were created by this class, but are not in the committed
    * manifest set.
    *
@@ -359,6 +404,8 @@ abstract class ManifestFilterManager<F extends ContentFile<F>> {
   private void invalidateFilteredCache() {
     cleanUncommitted(SnapshotProducer.EMPTY_SET);
     replacedManifestsCount.set(0);
+    v4ConsumedManifests.clear();
+    resetV4AdaptiveState();
   }
 
   /**
@@ -384,7 +431,8 @@ abstract class ManifestFilterManager<F extends ContentFile<F>> {
       // manifest without copying data. if a manifest does have a file to remove, this will break
       // out of the loop and move on to filtering the manifest.
       if (manifestHasDeletedFiles(evaluator, manifest, reader)) {
-        ManifestFile filtered = filterManifestWithDeletedFiles(evaluator, manifest, reader);
+        ManifestFile filtered =
+            filterManifestWithDeletedFiles(evaluator, manifest, reader, tableSchema);
         replacedManifestsCount.incrementAndGet();
         return filtered;
       } else {
@@ -495,15 +543,19 @@ abstract class ManifestFilterManager<F extends ContentFile<F>> {
 
   @SuppressWarnings({"CollectionUndefinedEquality", "checkstyle:CyclomaticComplexity"})
   private ManifestFile filterManifestWithDeletedFiles(
-      PartitionAndMetricsEvaluator evaluator, ManifestFile manifest, ManifestReader<F> reader) {
+      PartitionAndMetricsEvaluator evaluator,
+      ManifestFile manifest,
+      ManifestReader<F> reader,
+      Schema tableSchema) {
     boolean isDelete = reader.isDeleteManifestReader();
+    boolean v4Mode = isV4AdaptiveMode() && !isDelete;
     // when this point is reached, there is at least one file that will be deleted in the
     // manifest. produce a copy of the manifest with all deleted files removed.
     Set<F> deletedFiles = newFileSet();
     AtomicInteger duplicateDeleteCount = new AtomicInteger(0);
 
     try {
-      ManifestWriter<F> writer = newManifestWriter(reader.spec());
+      ManifestWriter<F> writer = v4Mode ? null : newManifestWriter(reader.spec());
       try {
         reader
             .liveEntries()
@@ -531,7 +583,11 @@ abstract class ManifestFilterManager<F extends ContentFile<F>> {
                         file.location());
 
                     if (allRowsMatch) {
-                      writer.delete(entry);
+                      if (v4Mode) {
+                        routeV4AdaptiveEntry(entry, EntryStatus.DELETED, tableSchema);
+                      } else {
+                        writer.delete(entry);
+                      }
                       F fileCopy = file.copyWithoutStats();
 
                       if (deletedFiles.contains(file)) {
@@ -546,15 +602,36 @@ abstract class ManifestFilterManager<F extends ContentFile<F>> {
                         deletedFiles.add(fileCopy);
                       }
                     } else {
-                      writer.existing(entry);
+                      if (v4Mode) {
+                        routeV4AdaptiveEntry(entry, EntryStatus.EXISTING, tableSchema);
+                      } else {
+                        writer.existing(entry);
+                      }
                     }
 
                   } else {
-                    writer.existing(entry);
+                    if (v4Mode) {
+                      routeV4AdaptiveEntry(entry, EntryStatus.EXISTING, tableSchema);
+                    } else {
+                      writer.existing(entry);
+                    }
                   }
                 });
       } finally {
-        writer.close();
+        if (writer != null) {
+          writer.close();
+        }
+      }
+
+      if (v4Mode) {
+        // No new leaf manifest is written; the rows were routed through the v4 accumulator. Key
+        // the summary map on the source manifest so buildSummary can attribute deletions to it,
+        // and record the source manifest for downstream filtering (its leaf reference must not
+        // flow through as an external ref alongside the routed rows).
+        filteredManifests.put(manifest, manifest);
+        filteredManifestResults.put(manifest, Pair.of(deletedFiles, duplicateDeleteCount.get()));
+        v4ConsumedManifests.add(manifest);
+        return manifest;
       }
 
       // return the filtered manifest as a reader

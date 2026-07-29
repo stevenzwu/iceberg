@@ -550,7 +550,13 @@ class V4ManifestReader extends CloseableGroup implements CloseableIterable<Track
             : spec.partitionType();
     Types.StructType readPartitionType =
         TrackedFileWriter.emptyPartitionPlaceholderIfNeeded(unionType);
-    return TrackedFile.schema(readPartitionType, statsType);
+    // When callers pass null specsById (e.g. deprecated Snapshot.addedDataFiles), the derived
+    // stats schema is empty; TrackedFile.schema() would surface it as UnknownType which the
+    // Parquet reader cannot prune. Fall back to the root manifest's null-stats placeholder so the
+    // read schema always projects a struct column.
+    Types.StructType readStatsType =
+        statsType.fields().isEmpty() ? TrackedFileWriter.ROOT_CONTENT_STATS_TYPE : statsType;
+    return TrackedFile.schema(readPartitionType, readStatsType);
   }
 
   private ManifestEntry<?> toManifestEntry(TrackedFileStruct row) {

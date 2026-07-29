@@ -165,6 +165,111 @@ public class ManifestFiles {
     return read(manifest, io, specsById, true);
   }
 
+  /**
+   * Reads colocated deletion vectors for a v4+ leaf data manifest as {@link DeleteFile} objects.
+   * Legacy (pre-v4) manifests have no colocated DVs so the returned iterable is empty for them.
+   *
+   * <p>Used by v4+ DV-collapse to identify prior DVs that will be superseded by REPLACED/MODIFIED
+   * pairs.
+   */
+  static CloseableIterable<DeleteFile> readColocatedDVs(
+      ManifestFile manifest, FileIO io, Map<Integer, PartitionSpec> specsById) {
+    Preconditions.checkArgument(
+        manifest.content() == ManifestContent.DATA,
+        "Cannot read colocated deletion vectors from a delete manifest: %s",
+        manifest);
+
+    if (manifest.formatVersion() < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
+      return CloseableIterable.empty();
+    }
+
+    InputFile file = newInputFile(io, manifest);
+    InheritableMetadata inheritableMetadata = InheritableMetadataFactory.fromManifest(manifest);
+    V4ManifestReader reader =
+        V4ManifestReader.forData(file, manifest.partitionSpecId(), specsById, inheritableMetadata);
+    CloseableIterable<DeleteFile> dvs = reader.colocatedDVDeleteFiles();
+    // Ownership: the reader registers Parquet read state as closeables. Close it when the iterable
+    // is closed so we don't leak the underlying Parquet row iterator.
+    return CloseableIterable.combine(dvs, reader);
+  }
+
+  /**
+   * Returns colocated DV changes for a v4+ leaf data manifest as {@code (status, DeleteFile)}
+   * pairs: {@link ManifestEntry.Status#ADDED} for newly-live DVs (born-with-DV or DV added/updated)
+   * and {@link ManifestEntry.Status#DELETED} for prior DVs that were superseded (preserved on
+   * REPLACED rows). Legacy (pre-v4) manifests have no colocated DVs and produce an empty iterable.
+   *
+   * <p>Used by {@code SnapshotChanges} and {@code BaseSnapshot} to report v4+ DV changes as
+   * delete-file deltas alongside legacy delete-manifest entries.
+   */
+  static CloseableIterable<Pair<ManifestEntry.Status, DeleteFile>> readColocatedDVChanges(
+      ManifestFile manifest, FileIO io, Map<Integer, PartitionSpec> specsById) {
+    Preconditions.checkArgument(
+        manifest.content() == ManifestContent.DATA,
+        "Cannot read colocated deletion vector changes from a delete manifest: %s",
+        manifest);
+
+    if (manifest.formatVersion() < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
+      return CloseableIterable.empty();
+    }
+
+    InputFile file = newInputFile(io, manifest);
+    InheritableMetadata inheritableMetadata = InheritableMetadataFactory.fromManifest(manifest);
+    V4ManifestReader reader =
+        V4ManifestReader.forData(file, manifest.partitionSpecId(), specsById, inheritableMetadata);
+    CloseableIterable<Pair<ManifestEntry.Status, DeleteFile>> changes = reader.colocatedDVChanges();
+    return CloseableIterable.combine(changes, reader);
+  }
+
+  /**
+   * Returns true if the manifest uses the v4+ {@code content_entry} schema shape (Parquet with the
+   * tracking struct), false for legacy Avro {@code manifest_entry} manifests. Visible for {@link
+   * SnapshotChanges} and {@link BaseSnapshot} to dispatch between v4+-aware and legacy read paths.
+   */
+  static boolean isV4ContentEntryManifest(ManifestFile manifest, FileIO io) {
+    return manifest.formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE;
+  }
+
+  /**
+   * Returns data-file changes from a v4+ leaf data manifest as {@code (status, DataFile)} pairs.
+   * Surfaces v4+ tracking status directly so callers can distinguish data-file changes (ADDED,
+   * DELETED) from DV-state transitions (REPLACED, MODIFIED). REPLACED and MODIFIED rows are
+   * suppressed so callers only see actual data-file adds/removes. Returns an empty iterable for
+   * legacy (pre-v4) manifests.
+   */
+  static CloseableIterable<Pair<ManifestEntry.Status, DataFile>> readDataFileChanges(
+      ManifestFile manifest, FileIO io, Map<Integer, PartitionSpec> specsById) {
+    Preconditions.checkArgument(
+        manifest.content() == ManifestContent.DATA,
+        "Cannot read data file changes from a delete manifest: %s",
+        manifest);
+
+    if (manifest.formatVersion() < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
+      return CloseableIterable.empty();
+    }
+
+    InputFile file = newInputFile(io, manifest);
+    InheritableMetadata inheritableMetadata = InheritableMetadataFactory.fromManifest(manifest);
+    V4ManifestReader reader =
+        V4ManifestReader.forData(file, manifest.partitionSpecId(), specsById, inheritableMetadata);
+
+    // Surface only ADDED and DELETED rows from the v4+ tracking; REPLACED and MODIFIED are
+    // DV-state transitions and not data-file changes. Project the v4+ EntryStatus to the legacy
+    // ManifestEntry.Status (ADDED → ADDED, DELETED → DELETED) so callers can switch on a single
+    // enum.
+    CloseableIterable<Pair<ManifestEntry.Status, DataFile>> changes =
+        CloseableIterable.transform(
+            reader.dataFileChanges(),
+            pair -> {
+              ManifestEntry.Status status =
+                  pair.first() == EntryStatus.ADDED
+                      ? ManifestEntry.Status.ADDED
+                      : ManifestEntry.Status.DELETED;
+              return Pair.of(status, pair.second());
+            });
+    return CloseableIterable.combine(changes, reader);
+  }
+
   static ManifestReader<DataFile> read(
       ManifestFile manifest,
       FileIO io,
@@ -328,14 +433,13 @@ public class ManifestFiles {
         return new ManifestWriter.V3Writer(
             spec, encryptedOutputFile, snapshotId, firstRowId, writerProperties);
       case 4:
-        // TODO(Phase 6+): route through V4LeafWriter once MergingSnapshotProducer collapses DVs
-        // into data manifests (born-with-DV + REPLACED/MODIFIED pairs). Without that collapse,
-        // standalone POSITION_DELETES DVs reach V4LeafWriter.forDelete's EqualityDeleteTrackedFile
-        // adapter which rejects them per v4 spec. Until Phase 6+ lands, the commit path routes v4
-        // leaves through the legacy V4Writer (manifest_entry format) so they round-trip through
-        // v3-style manifest lists and existing DV tests keep working.
-        return new ManifestWriter.V4Writer(
-            spec, encryptedOutputFile, snapshotId, firstRowId, writerProperties);
+        return V4LeafWriter.forData(
+            spec,
+            spec.partitionType(),
+            encryptedOutputFile,
+            snapshotId,
+            firstRowId,
+            writerProperties);
     }
     throw new UnsupportedOperationException(
         "Cannot write manifest for table version: " + formatVersion);
@@ -491,8 +595,8 @@ public class ManifestFiles {
       case 3:
         return new ManifestWriter.V3DeleteWriter(spec, outputFile, snapshotId, writerProperties);
       case 4:
-        // See newWriter case 4 TODO — legacy V4DeleteWriter until Phase 6+ DV collapse logic lands.
-        return new ManifestWriter.V4DeleteWriter(spec, outputFile, snapshotId, writerProperties);
+        return V4LeafWriter.forDelete(
+            spec, spec.partitionType(), outputFile, snapshotId, writerProperties);
     }
     throw new UnsupportedOperationException(
         "Cannot write manifest for table version: " + formatVersion);
