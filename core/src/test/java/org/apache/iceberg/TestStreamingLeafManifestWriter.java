@@ -96,7 +96,7 @@ public class TestStreamingLeafManifestWriter {
     // A writer is opened on the spot to hold zero rows and become the root manifest.
     assertThat(writerCounter.get()).isEqualTo(1);
     assertThat(writer.completedLeaves()).isEmpty();
-    assertThat(root.toRootManifestFile().location()).isNotNull();
+    assertThat(root.toSnapshotFile().location()).isNotNull();
   }
 
   @Test
@@ -113,7 +113,7 @@ public class TestStreamingLeafManifestWriter {
 
     assertThat(writerCounter.get()).as("single writer opened").isEqualTo(1);
     assertThat(writer.completedLeaves()).as("nothing rolled").isEmpty();
-    assertThat(root.toRootManifestFile().location()).isNotNull();
+    assertThat(root.toSnapshotFile().location()).isNotNull();
   }
 
   @Test
@@ -131,7 +131,7 @@ public class TestStreamingLeafManifestWriter {
     // First writer rolled as leaf at row 5; second writer opened for row 6 and became root.
     assertThat(writerCounter.get()).isEqualTo(2);
     assertThat(writer.completedLeaves()).as("one rolled leaf").hasSize(1);
-    assertThat(root.toRootManifestFile().location()).isNotNull();
+    assertThat(root.toSnapshotFile().location()).isNotNull();
   }
 
   @Test
@@ -149,7 +149,7 @@ public class TestStreamingLeafManifestWriter {
     // Promotion opens a fresh writer to hold zero rows and become root.
     assertThat(writerCounter.get()).isEqualTo(2);
     assertThat(writer.completedLeaves()).hasSize(1);
-    assertThat(root.toRootManifestFile().location()).isNotNull();
+    assertThat(root.toSnapshotFile().location()).isNotNull();
   }
 
   @Test

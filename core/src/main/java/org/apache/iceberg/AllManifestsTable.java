@@ -134,21 +134,22 @@ public class AllManifestsTable extends BaseMetadataTable {
           Iterables.transform(
               filteredSnapshots,
               snap -> {
-                if (snap.manifestListLocation() != null) {
+                if (snap.formatVersion() < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE
+                    && snap.snapshotFileLocation() != null) {
                   return new ManifestListReadTask(
                       dataTableSchema,
                       io,
                       schema(),
                       specs,
-                      new BaseManifestListFile(snap.manifestListLocation(), snap.keyId()),
+                      new BaseManifestListFile(snap.snapshotFileLocation(), snap.keyId()),
                       filter,
                       snap.snapshotId());
                 } else {
                   // v4+ snapshots address the manifest tree via a root manifest; legacy snapshots
                   // without a manifest list (synthetic) fall back to the table metadata file.
                   String inputLocation =
-                      snap.rootManifestLocation() != null
-                          ? snap.rootManifestLocation()
+                      snap.snapshotFileLocation() != null
+                          ? snap.snapshotFileLocation()
                           : ((BaseTable) table()).operations().current().metadataFileLocation();
                   return StaticDataTask.of(
                       io.newInputFile(inputLocation),

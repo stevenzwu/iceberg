@@ -82,12 +82,8 @@ public class ManifestsTable extends BaseMetadataTable {
 
     // v4+ snapshots address the manifest tree via a root manifest; legacy snapshots without a
     // manifest list (synthetic) fall back to the table metadata file.
-    String inputLocation;
-    if (snapshot.manifestListLocation() != null) {
-      inputLocation = snapshot.manifestListLocation();
-    } else if (snapshot.rootManifestLocation() != null) {
-      inputLocation = snapshot.rootManifestLocation();
-    } else {
+    String inputLocation = snapshot.snapshotFileLocation();
+    if (inputLocation == null) {
       inputLocation = table().operations().current().metadataFileLocation();
     }
 

@@ -536,7 +536,9 @@ public class TestBase {
     ManifestFile manifest;
     if (adaptive) {
       List<ManifestFile> newManifests = Lists.newArrayList(snap.dataManifests(FILE_IO));
-      assertThat(newManifests).as("v4 snapshot must surface at least one data manifest").isNotEmpty();
+      assertThat(newManifests)
+          .as("v4 snapshot must surface at least one data manifest")
+          .isNotEmpty();
       // The virtual manifest over the promoted root — or an on-disk leaf when this commit spilled —
       // whose snapshotId matches the current commit.
       manifest =

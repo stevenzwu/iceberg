@@ -31,8 +31,8 @@ import org.apache.iceberg.types.Types;
  *
  * <p>Role wrappers layer on top: {@link LeafManifestWriter} adds per-status counters and builds a
  * leaf {@link ManifestFile}; {@link RootManifestWriter} adds manifest-reference resolution and
- * builds the root {@link ManifestListFile}. Both construct the appropriate {@code content_entry}
- * appender (leaf vs root schema and metadata) and wrap it in an instance of this class.
+ * builds a {@link SnapshotFile}. Both construct the appropriate {@code content_entry} appender
+ * (leaf vs root schema and metadata) and wrap it in an instance of this class.
  *
  * <p>The static schema helpers here ({@link #ROOT_CONTENT_STATS_TYPE}, {@link
  * #EMPTY_PARTITION_PLACEHOLDER}) are the shared schema contract, consumed by the writers above and

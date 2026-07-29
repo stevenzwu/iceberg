@@ -66,7 +66,7 @@ class RootManifests {
    * @param specsById the table's full live partition spec map; the writer derives the partition
    *     column shape from {@link Partitioning#partitionType(Schema, java.util.Collection)} so the
    *     root manifest partition schema matches the leaf manifests
-   * @throws IllegalArgumentException if {@code formatVersion < 4}
+   * @throws IllegalArgumentException if the format version does not support root manifests
    */
   static RootManifestWriter write(
       int formatVersion,
@@ -112,7 +112,7 @@ class RootManifests {
       Map<Integer, PartitionSpec> specsById,
       Types.StructType contentStatsType) {
     Preconditions.checkArgument(
-        formatVersion >= 4,
+        formatVersion >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE,
         "Cannot write root manifest for format version %s (minimum: 4)",
         formatVersion);
     Preconditions.checkArgument(tableSchema != null, "Invalid table schema: null");

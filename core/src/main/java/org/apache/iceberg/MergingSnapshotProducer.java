@@ -1034,12 +1034,12 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
   private void filterV4AdaptiveParentDirectRows(TableMetadata base, Snapshot snapshot) {
     if (snapshot == null
         || base.formatVersion() < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE
-        || snapshot.rootManifestLocation() == null) {
+        || snapshot.formatVersion() < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
       return;
     }
     List<DataFile> parentDirect =
         RootManifestReader.readDirectDataRows(
-            ops().io().newInputFile(snapshot.rootManifestLocation()), base.specsById());
+            ops().io().newInputFile(snapshot.snapshotFileLocation()), base.specsById());
     if (parentDirect.isEmpty()) {
       return;
     }
@@ -1089,7 +1089,8 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
     // writing separate delete manifests.
     List<ManifestFile> dvRewrittenManifests = ImmutableList.of();
     List<ManifestFile> filteredWithoutDVReplaced = filtered;
-    if (base.formatVersion() >= 4 && !dvsByReferencedFile.isEmpty()) {
+    if (base.formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE
+        && !dvsByReferencedFile.isEmpty()) {
       dvRewrittenManifests = prepareDVRewrittenManifests(base, filtered);
       if (!dvReplacedManifestPaths.isEmpty()) {
         filteredWithoutDVReplaced =
@@ -1244,7 +1245,8 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
       // v4 adaptive-tree path: route new files into the accumulator input channel instead of
       // writing per-spec leaf manifests. Born-with-DV files are wrapped with their DV inline via
       // injectV4AdaptiveDataFiles' bornWithDVByPath parameter.
-      if (ops().current().formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
+      if (ops().current().formatVersion()
+          >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
         injectV4AdaptiveDataFiles(
             Iterables.concat(newDataFilesBySpec.values()),
             newDataFilesDataSequenceNumber,
@@ -1799,13 +1801,15 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
    *
    * <p>Runs after {@link #prepareNewDataManifests}, so {@link
    * SnapshotProducer#injectV4AdaptiveDataFiles}' clear-on-refill of the new-live channel has
-   * already completed; the MODIFIED row appended here survives to
-   * {@link SnapshotProducer#runAdaptiveDrainAndPromote}. On retry {@link
-   * #prepareDVRewrittenManifests}' reset clears {@code collapsedDVPaths}, and the outer apply
-   * flow re-clears retirement + new-live before re-entering this method, so state is reset.
+   * already completed; the MODIFIED row appended here survives to {@link
+   * SnapshotProducer#runAdaptiveDrainAndPromote}. On retry {@link #prepareDVRewrittenManifests}'
+   * reset clears {@code collapsedDVPaths}, and the outer apply flow re-clears retirement + new-live
+   * before re-entering this method, so state is reset.
    */
   private void collapseDVsForDirectRows(TableMetadata base, Snapshot parentSnapshot) {
-    if (parentSnapshot == null || parentSnapshot.rootManifestLocation() == null) {
+    if (parentSnapshot == null
+        || parentSnapshot.formatVersion()
+            < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
       return;
     }
     List<Map.Entry<String, DeleteFile>> uncollapsed = Lists.newArrayList();
@@ -1821,7 +1825,7 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
     Map<Integer, PartitionSpec> specsById = base.specsById();
     List<TrackedFile> parentDirectRows =
         RootManifestReader.readDirectRows(
-            ops().io().newInputFile(parentSnapshot.rootManifestLocation()), specsById);
+            ops().io().newInputFile(parentSnapshot.snapshotFileLocation()), specsById);
     if (parentDirectRows.isEmpty()) {
       return;
     }
@@ -1943,7 +1947,8 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
 
     @Override
     protected boolean isV4AdaptiveMode() {
-      return ops().current().formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE;
+      return ops().current().formatVersion()
+          >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE;
     }
 
     @Override

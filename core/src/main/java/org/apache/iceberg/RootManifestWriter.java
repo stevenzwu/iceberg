@@ -179,15 +179,15 @@ class RootManifestWriter implements Closeable {
    * Returns metadata about this root manifest file so callers can build a snapshot referring to it.
    * The writer must be closed first.
    */
-  ManifestListFile toRootManifestFile() {
-    Preconditions.checkState(closed, "Cannot build ManifestListFile, writer is not closed");
+  SnapshotFile toSnapshotFile() {
+    Preconditions.checkState(closed, "Cannot build SnapshotFile, writer is not closed");
     if (keyMetadata != null && keyMetadata.encryptionKey() != null) {
       String keyId =
           standardEncryptionManager.addManifestListKeyMetadata(
               keyMetadata.copyWithLength(writer.length()));
-      return new BaseManifestListFile(writer.outputFile().location(), keyId);
+      return new BaseSnapshotFile(writer.outputFile().location(), keyId);
     } else {
-      return new BaseManifestListFile(writer.outputFile().location(), null);
+      return new BaseSnapshotFile(writer.outputFile().location(), null);
     }
   }
 

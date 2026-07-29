@@ -100,7 +100,9 @@ public class SnapshotsTable extends BaseMetadataTable {
         snap.snapshotId(),
         snap.parentId(),
         snap.operation(),
-        snap.manifestListLocation(),
+        snap.formatVersion() < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE
+            ? snap.snapshotFileLocation()
+            : null,
         snap.summary());
   }
 }

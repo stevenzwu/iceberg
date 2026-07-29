@@ -83,13 +83,13 @@ public class SnapshotParser {
       generator.writeEndObject();
     }
 
-    String rootManifest = snapshot.rootManifestLocation();
-    String manifestList = snapshot.manifestListLocation();
-    if (rootManifest != null) {
-      generator.writeStringField(ROOT_MANIFEST, rootManifest);
-    } else if (manifestList != null) {
+    String snapshotFile = snapshot.snapshotFileLocation();
+    if (snapshotFile != null
+        && snapshot.formatVersion() >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
+      generator.writeStringField(ROOT_MANIFEST, snapshotFile);
+    } else if (snapshotFile != null) {
       // write just the location. manifests should not be embedded in JSON along with a list
-      generator.writeStringField(MANIFEST_LIST, manifestList);
+      generator.writeStringField(MANIFEST_LIST, snapshotFile);
     } else {
       // embed the manifest list in the JSON, v1 only
       JsonUtil.writeStringArray(
@@ -192,7 +192,6 @@ public class SnapshotParser {
           operation,
           summary,
           schemaId,
-          null,
           rootManifest,
           firstRowId,
           addedRows,

@@ -18,10 +18,32 @@
  */
 package org.apache.iceberg;
 
-/**
- * A v3-and-earlier manifest list file.
- *
- * @deprecated since 1.13.0; prefer {@link SnapshotFile}, which also covers v4+ root manifests.
- */
-@Deprecated
-public interface ManifestListFile extends SnapshotFile {}
+import java.io.Serializable;
+import java.nio.ByteBuffer;
+import org.apache.iceberg.encryption.EncryptionManager;
+import org.apache.iceberg.encryption.EncryptionUtil;
+
+class BaseSnapshotFile implements SnapshotFile, Serializable {
+  private final String location;
+  private final String encryptionKeyID;
+
+  BaseSnapshotFile(String location, String encryptionKeyID) {
+    this.location = location;
+    this.encryptionKeyID = encryptionKeyID;
+  }
+
+  @Override
+  public String location() {
+    return location;
+  }
+
+  @Override
+  public String encryptionKeyID() {
+    return encryptionKeyID;
+  }
+
+  @Override
+  public ByteBuffer decryptKeyMetadata(EncryptionManager em) {
+    return EncryptionUtil.decryptSnapshotFileKeyMetadata(this, em);
+  }
+}

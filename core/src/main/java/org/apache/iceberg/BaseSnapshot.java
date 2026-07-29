@@ -38,8 +38,7 @@ class BaseSnapshot implements Snapshot {
   private final Long parentId;
   private final long sequenceNumber;
   private final long timestampMillis;
-  private final String manifestListLocation;
-  private final String rootManifestLocation;
+  private final String snapshotFileLocation;
   private final int formatVersion;
   private final String operation;
   private final Map<String, String> summary;
@@ -66,7 +65,7 @@ class BaseSnapshot implements Snapshot {
       String operation,
       Map<String, String> summary,
       Integer schemaId,
-      String manifestList,
+      String snapshotFileLocation,
       Long firstRowId,
       Long addedRows,
       String keyId) {
@@ -79,8 +78,7 @@ class BaseSnapshot implements Snapshot {
         operation,
         summary,
         schemaId,
-        manifestList,
-        null,
+        snapshotFileLocation,
         firstRowId,
         addedRows,
         keyId);
@@ -95,16 +93,12 @@ class BaseSnapshot implements Snapshot {
       String operation,
       Map<String, String> summary,
       Integer schemaId,
-      String manifestList,
-      String rootManifest,
+      String snapshotFileLocation,
       Long firstRowId,
       Long addedRows,
       String keyId) {
     Preconditions.checkArgument(
-        (manifestList == null) != (rootManifest == null),
-        "Invalid snapshot: must have exactly one of manifest-list (%s) or root-manifest (%s)",
-        manifestList,
-        rootManifest);
+        snapshotFileLocation != null, "Invalid snapshot: snapshot file location cannot be null");
     Preconditions.checkArgument(
         firstRowId == null || firstRowId >= 0,
         "Invalid first-row-id (cannot be negative): %s",
@@ -124,8 +118,7 @@ class BaseSnapshot implements Snapshot {
     this.operation = operation;
     this.summary = summary;
     this.schemaId = schemaId;
-    this.manifestListLocation = manifestList;
-    this.rootManifestLocation = rootManifest;
+    this.snapshotFileLocation = snapshotFileLocation;
     this.v1ManifestLocations = null;
     this.firstRowId = firstRowId;
     this.addedRows = firstRowId != null ? addedRows : null;
@@ -149,8 +142,7 @@ class BaseSnapshot implements Snapshot {
     this.operation = operation;
     this.summary = summary;
     this.schemaId = schemaId;
-    this.manifestListLocation = null;
-    this.rootManifestLocation = null;
+    this.snapshotFileLocation = null;
     this.v1ManifestLocations = v1ManifestLocations;
     this.firstRowId = null;
     this.addedRows = null;
@@ -223,15 +215,15 @@ class BaseSnapshot implements Snapshot {
 
     if (allManifests == null) {
       // if manifests isn't set, then the snapshotFile is set and should be read to get the list
-      if (formatVersion >= 4) {
+      if (formatVersion >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
         this.allManifests =
             RootManifests.read(
-                fileIO.newInputFile(new BaseManifestListFile(rootManifestLocation, keyId)));
+                fileIO.newInputFile(new BaseSnapshotFile(snapshotFileLocation, keyId)));
       } else {
         this.allManifests =
             ManifestLists.read(
                 ManifestLists.newInputFile(
-                    fileIO, new BaseManifestListFile(manifestListLocation, keyId)));
+                    fileIO, new BaseManifestListFile(snapshotFileLocation, keyId)));
       }
     }
 
@@ -304,13 +296,22 @@ class BaseSnapshot implements Snapshot {
   }
 
   @Override
-  public String manifestListLocation() {
-    return manifestListLocation;
+  public String snapshotFileLocation() {
+    return snapshotFileLocation;
   }
 
   @Override
-  public String rootManifestLocation() {
-    return rootManifestLocation;
+  public String manifestListLocation() {
+    Preconditions.checkState(
+        formatVersion < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE,
+        "Snapshot format version %s has no manifest list; use snapshotFileLocation() instead",
+        formatVersion);
+    return snapshotFileLocation;
+  }
+
+  @Override
+  public int formatVersion() {
+    return formatVersion;
   }
 
   private void cacheDeleteFileChanges(FileIO fileIO) {
@@ -475,7 +476,7 @@ class BaseSnapshot implements Snapshot {
         .add("timestamp_ms", timestampMillis)
         .add("operation", operation)
         .add("summary", summary)
-        .add("manifest-list", manifestListLocation)
+        .add("snapshot-file", snapshotFileLocation)
         .add("schema-id", schemaId)
         .add("first-row-id", firstRowId)
         .add("added-rows", addedRows)

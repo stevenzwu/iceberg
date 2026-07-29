@@ -316,7 +316,7 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
 
     int formatVersion = base.formatVersion();
 
-    if (formatVersion >= 4) {
+    if (formatVersion >= TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
       return applyV4(manifests, parentSnapshot, sequenceNumber, formatVersion);
     } else {
       return applyV3(manifests, parentSnapshotId, sequenceNumber, formatVersion);
@@ -403,12 +403,12 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
     // AND no direct-row content is queued in the accumulator input channels, none of the
     // manifests were written by this snapshot and we can reuse the parent's root manifest.
     // Writing a new root manifest in that case leaves an orphan file that the cleanup path
-    // deletes, and which would be referenced by the new snapshot's rootManifestLocation if the
+    // deletes, and which would be referenced by the new snapshot's snapshotFileLocation if the
     // commit went through unchanged. Adaptive small-write commits inject rows directly into the
     // accumulator (never surfaced as ManifestFile entries) — skipping the no-op branch when the
     // channels are non-empty ensures those rows drain into a fresh promoted root.
     if (parentSnapshot != null
-        && parentSnapshot.rootManifestLocation() != null
+        && parentSnapshot.snapshotFileLocation() != null
         && v4AdaptiveNewLiveDataRows.isEmpty()
         && v4AdaptiveRetirementRows.isEmpty()
         && isNoOp(manifests, parentSnapshot.allManifests(ops.io()))) {
@@ -421,8 +421,7 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
           operation(),
           summary(base),
           base.currentSchemaId(),
-          null,
-          parentSnapshot.rootManifestLocation(),
+          parentSnapshot.snapshotFileLocation(),
           base.nextRowId(),
           0L,
           parentSnapshot.keyId());
@@ -442,15 +441,15 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
     // StreamingLeafManifestWriter, promotes the last-open writer to root with all
     // leaf-manifest-entries appended. Small commits stay inline as root direct rows; larger commits
     // spill leaves.
-    ManifestListFile promotedRoot =
+    SnapshotFile promotedRoot =
         runAdaptiveDrainAndPromote(
             manifestFiles, parentSnapshot, currentSnapshotId, sequenceNumber);
-    String rootManifestLocation = promotedRoot.location();
-    // Null for promoted-leaf roots (their appender carries no manifest-list encryption key — future
-    // work); the value flows through the ManifestListFile from
-    // RootManifestWriter#toRootManifestFile.
-    String rootEncryptionKeyId = promotedRoot.encryptionKeyID();
-    manifestLists.add(rootManifestLocation);
+    String snapshotFileLocation = promotedRoot.location();
+    // Null for promoted-leaf roots (their appender carries no snapshot file encryption key —
+    // future work); the value flows through the SnapshotFile from
+    // RootManifestWriter#toSnapshotFile.
+    String snapshotFileEncryptionKeyId = promotedRoot.encryptionKeyID();
+    manifestLists.add(snapshotFileLocation);
 
     Map<String, String> summary = summary();
     String operation = operation();
@@ -485,11 +484,10 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
         operation(),
         summary(base),
         base.currentSchemaId(),
-        null,
-        rootManifestLocation,
+        snapshotFileLocation,
         firstRowId,
         addedRows,
-        rootEncryptionKeyId);
+        snapshotFileEncryptionKeyId);
   }
 
   /**
@@ -516,7 +514,7 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
    * root as direct rows and spilled leaves flow in as leaf-manifest-entry refs. Eq-delete pools are
    * still Phase 6 work.
    */
-  private ManifestListFile runAdaptiveDrainAndPromote(
+  private SnapshotFile runAdaptiveDrainAndPromote(
       ManifestFile[] externalManifests,
       Snapshot parentSnapshot,
       long currentSnapshotId,
@@ -592,14 +590,16 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
    * commit; a future slice can cache this on the parent Snapshot.
    */
   private List<TrackedFile> readParentDirectRowsAsExisting(Snapshot parentSnapshot) {
-    if (parentSnapshot == null || parentSnapshot.rootManifestLocation() == null) {
+    if (parentSnapshot == null
+        || parentSnapshot.formatVersion()
+            < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
       return java.util.Collections.emptyList();
     }
     TableMetadata current = ops.current();
     Map<Integer, PartitionSpec> specsById = current.specsById();
     List<TrackedFile> raw =
         RootManifestReader.readDirectRows(
-            ops.io().newInputFile(parentSnapshot.rootManifestLocation()), specsById);
+            ops.io().newInputFile(parentSnapshot.snapshotFileLocation()), specsById);
     if (raw.isEmpty()) {
       return java.util.Collections.emptyList();
     }
@@ -992,15 +992,12 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
             cleanUncommitted(Sets.newHashSet(saved.allManifests(ops.io())));
           }
 
-          // also clean up unused manifest lists (or root manifests for v4) created by multiple
-          // attempts. For v4, manifestListLocation() is null; use rootManifestLocation() instead.
-          String committedLocation =
-              saved.manifestListLocation() != null
-                  ? saved.manifestListLocation()
-                  : saved.rootManifestLocation();
-          for (String manifestList : manifestLists) {
-            if (!manifestList.equals(committedLocation)) {
-              deleteFile(manifestList);
+          // also clean up unused snapshot files (manifest lists for v3, root manifests for v4)
+          // created by multiple attempts.
+          String committedLocation = saved.snapshotFileLocation();
+          for (String snapshotFile : manifestLists) {
+            if (!snapshotFile.equals(committedLocation)) {
+              deleteFile(snapshotFile);
             }
           }
         } else {

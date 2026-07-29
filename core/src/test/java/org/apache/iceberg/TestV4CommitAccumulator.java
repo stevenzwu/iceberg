@@ -100,7 +100,7 @@ public class TestV4CommitAccumulator {
       acc.add(dataRow(i, EntryStatus.DELETED), false);
       acc.add(dataRow(i, EntryStatus.REPLACED), false);
     }
-    ManifestListFile root = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
+    SnapshotFile root = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
 
     assertThat(root).isNotNull();
     assertThat(acc.leafManifests()).as("no rolled/spilled leaves").isEmpty();
@@ -117,7 +117,7 @@ public class TestV4CommitAccumulator {
     for (int i = 0; i < 6; i++) {
       acc.add(dataRow(i, EntryStatus.ADDED), true);
     }
-    ManifestListFile root = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
+    SnapshotFile root = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
 
     assertThat(root).isNotNull();
     assertThat(acc.leafManifests()).as("one rolled leaf").hasSize(1);
@@ -134,7 +134,7 @@ public class TestV4CommitAccumulator {
       acc.add(dataRow(i, EntryStatus.DELETED), false);
       acc.add(dataRow(i, EntryStatus.REPLACED), false);
     }
-    ManifestListFile root = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
+    SnapshotFile root = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
 
     assertThat(root).isNotNull();
     assertThat(acc.leafManifests()).as("2 retirement leaves").hasSize(2);
@@ -146,7 +146,7 @@ public class TestV4CommitAccumulator {
   public void testEmptyAccumulatorPromotes() {
     V4CommitAccumulator acc =
         new V4CommitAccumulator(leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY);
-    ManifestListFile root = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
+    SnapshotFile root = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
 
     // No adds at all: promoteCurrentToRoot opens one writer just to hold zero rows + close as root.
     assertThat(root).isNotNull();
@@ -209,7 +209,7 @@ public class TestV4CommitAccumulator {
     acc.addExternalLeafReference(external1, EntryStatus.ADDED);
     acc.addExternalLeafReference(external2, EntryStatus.EXISTING);
 
-    ManifestListFile root = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
+    SnapshotFile root = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
 
     assertThat(root).isNotNull();
     // Externals aren't in leafManifests(); they're refs, not accumulator-owned files.
@@ -251,8 +251,8 @@ public class TestV4CommitAccumulator {
     V4CommitAccumulator acc =
         new V4CommitAccumulator(leafFactory(), TARGET_BYTES, AVG_BYTES_PER_ENTRY);
     acc.add(dataRow(0, EntryStatus.ADDED), true);
-    ManifestListFile firstRoot = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
-    ManifestListFile secondRoot = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
+    SnapshotFile firstRoot = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
+    SnapshotFile secondRoot = acc.close(SNAPSHOT_ID, SEQUENCE_NUMBER, 0L);
     assertThat(secondRoot).isSameAs(firstRoot);
     assertThat(acc.promotedRoot()).isSameAs(firstRoot);
   }

@@ -60,7 +60,7 @@ class V4CommitAccumulator {
   private final List<Pair<ManifestFile, EntryStatus>> externalLeafRefs = Lists.newArrayList();
 
   private boolean closed = false;
-  private ManifestListFile promotedRoot;
+  private SnapshotFile promotedRoot;
 
   /**
    * @param dataLeafWriterFactory supplies a fresh {@link LeafManifestWriter} on each roll (live
@@ -138,8 +138,8 @@ class V4CommitAccumulator {
    * root manifest, then drives the remaining content into the returned open {@link
    * RootManifestWriter}: each retirement pool's sub-target tail as direct rows, and every
    * rolled/spilled leaf plus the caller's external references as leaf-manifest-entries. Returns the
-   * root's {@link ManifestListFile}; its {@code location} is the snapshot's {@code
-   * rootManifestLocation}.
+   * promoted root's {@link SnapshotFile}; its {@code location} is the snapshot's {@code
+   * snapshotFileLocation}.
    *
    * <p>Idempotent — a second call returns the same {@code promotedRoot}.
    *
@@ -147,7 +147,7 @@ class V4CommitAccumulator {
    * @param sequenceNumber the committing sequence number
    * @param nextRowId the initial first-row-id counter for freshly-written DATA manifest refs
    */
-  ManifestListFile close(long snapshotId, long sequenceNumber, Long nextRowId) {
+  SnapshotFile close(long snapshotId, long sequenceNumber, Long nextRowId) {
     if (closed) {
       return promotedRoot;
     }
@@ -189,13 +189,13 @@ class V4CommitAccumulator {
       throw new UncheckedIOException("Failed to close promoted root manifest writer", e);
     }
 
-    this.promotedRoot = root.toRootManifestFile();
+    this.promotedRoot = root.toSnapshotFile();
     this.closed = true;
     return promotedRoot;
   }
 
-  /** Returns the promoted root {@link ManifestListFile}. Requires {@link #close} to have run. */
-  ManifestListFile promotedRoot() {
+  /** Returns the promoted root {@link SnapshotFile}. Requires {@link #close} to have run. */
+  SnapshotFile promotedRoot() {
     Preconditions.checkState(closed, "V4CommitAccumulator is not closed yet");
     return promotedRoot;
   }

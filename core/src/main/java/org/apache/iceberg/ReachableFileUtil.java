@@ -123,9 +123,9 @@ public class ReachableFileUtil {
 
     List<String> manifestListLocations = Lists.newArrayList();
     for (Snapshot snapshot : snapshots) {
-      String manifestListLocation = snapshot.manifestListLocation();
-      if (manifestListLocation != null) {
-        manifestListLocations.add(manifestListLocation);
+      String snapshotFileLocation = snapshot.snapshotFileLocation();
+      if (snapshotFileLocation != null) {
+        manifestListLocations.add(snapshotFileLocation);
       }
     }
     return manifestListLocations;

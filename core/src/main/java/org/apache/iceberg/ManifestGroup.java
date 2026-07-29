@@ -421,7 +421,7 @@ class ManifestGroup {
   private Iterable<DeleteFile> readColocatedDVs() {
     List<DeleteFile> dvs = null;
     for (ManifestFile manifest : dataManifests) {
-      if (manifest.formatVersion() < 4) {
+      if (manifest.formatVersion() < TableMetadata.MIN_FORMAT_VERSION_ADAPTIVE_MANIFEST_TREE) {
         continue;
       }
       try (CloseableIterable<DeleteFile> iter =

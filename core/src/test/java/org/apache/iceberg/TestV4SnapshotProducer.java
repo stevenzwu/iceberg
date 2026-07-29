@@ -20,6 +20,7 @@ package org.apache.iceberg;
 
 import static org.apache.iceberg.types.Types.NestedField.required;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.File;
 import java.io.IOException;
@@ -133,7 +134,7 @@ public class TestV4SnapshotProducer {
    * default target does not spill a leaf.
    *
    * <ul>
-   *   <li>Snapshot has rootManifestLocation set (.parquet), manifestListLocation null.
+   *   <li>Snapshot has snapshotFileLocation set (.parquet); manifestListLocation() throws.
    *   <li>Root manifest carries one DATA direct row with status=ADDED — no DATA_MANIFEST refs.
    *   <li>{@link Snapshot#dataManifests} surfaces exactly one virtual manifest pointing at the root
    *       manifest itself (Phase 4d).
@@ -147,16 +148,17 @@ public class TestV4SnapshotProducer {
     assertThat(snap).isNotNull();
 
     // v4: root manifest not manifest list
-    assertThat(snap.rootManifestLocation())
+    assertThat(snap.snapshotFileLocation())
         .as("root manifest location must be set for v4")
         .isNotNull()
         .endsWith(".parquet");
-    assertThat(snap.manifestListLocation())
-        .as("manifest list location must be null for v4")
-        .isNull();
+    assertThatThrownBy(snap::manifestListLocation)
+        .as("manifestListLocation() must throw for v4 snapshots")
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("has no manifest list");
 
     // Root manifest must carry exactly one DATA direct row (no on-disk leaf).
-    List<TrackedFileStruct> rootRows = readRootManifestRows(snap.rootManifestLocation());
+    List<TrackedFileStruct> rootRows = readRootManifestRows(snap.snapshotFileLocation());
     assertThat(rootRows).hasSize(1);
 
     TrackedFileStruct rootEntry = rootRows.get(0);
@@ -178,7 +180,7 @@ public class TestV4SnapshotProducer {
     assertThat(dataManifests).hasSize(1);
     assertThat(dataManifests.get(0).path())
         .as("virtual manifest must point at the promoted root itself")
-        .isEqualTo(snap.rootManifestLocation());
+        .isEqualTo(snap.snapshotFileLocation());
   }
 
   /**
@@ -195,11 +197,11 @@ public class TestV4SnapshotProducer {
 
     Snapshot snap = table.currentSnapshot();
     assertThat(snap).isNotNull();
-    assertThat(snap.rootManifestLocation())
+    assertThat(snap.snapshotFileLocation())
         .as("root manifest location must be set for v4")
         .isNotNull()
         .endsWith(".parquet");
-    assertThat(snap.manifestListLocation()).isNull();
+    assertThatThrownBy(snap::manifestListLocation).isInstanceOf(IllegalStateException.class);
 
     // Phase 4d: direct rows are surfaced via a synthetic virtual manifest whose path is the root
     // manifest itself. No on-disk leaf manifest is written, so the only data manifest surfaced is
@@ -208,9 +210,9 @@ public class TestV4SnapshotProducer {
     assertThat(dataManifests).hasSize(1);
     assertThat(dataManifests.get(0).path())
         .as("virtual manifest must point at the promoted root itself")
-        .isEqualTo(snap.rootManifestLocation());
+        .isEqualTo(snap.snapshotFileLocation());
 
-    List<TrackedFileStruct> rootRows = readRootManifestRows(snap.rootManifestLocation());
+    List<TrackedFileStruct> rootRows = readRootManifestRows(snap.snapshotFileLocation());
     assertThat(rootRows).hasSize(2);
     assertThat(rootRows)
         .allSatisfy(
@@ -247,7 +249,7 @@ public class TestV4SnapshotProducer {
     Snapshot snap = table.currentSnapshot();
     List<DataFile> directRows =
         RootManifestReader.readDirectDataRows(
-            table.io().newInputFile(snap.rootManifestLocation()),
+            table.io().newInputFile(snap.snapshotFileLocation()),
             table.ops().current().specsById());
 
     assertThat(directRows)
@@ -273,14 +275,14 @@ public class TestV4SnapshotProducer {
     assertThat(parent.dataManifests(table.io()))
         .as("small-write parent has only a virtual manifest over the root's direct rows")
         .hasSize(1)
-        .allSatisfy(m -> assertThat(m.path()).isEqualTo(parent.rootManifestLocation()));
+        .allSatisfy(m -> assertThat(m.path()).isEqualTo(parent.snapshotFileLocation()));
 
     // Snap 2: delete FILE_A by file reference. Without Phase 4b this would throw
     // "Missing required files to delete" because FILE_A is not surfaced via parent.dataManifests().
     table.newDelete().deleteFile(FILE_A).commit();
 
     Snapshot child = table.currentSnapshot();
-    List<TrackedFileStruct> rootRows = readRootManifestRows(child.rootManifestLocation());
+    List<TrackedFileStruct> rootRows = readRootManifestRows(child.snapshotFileLocation());
     // Data-file direct rows only (exclude any DATA_MANIFEST entries).
     List<TrackedFileStruct> dataRows =
         rootRows.stream()
@@ -324,7 +326,7 @@ public class TestV4SnapshotProducer {
     table.newOverwrite().deleteFile(FILE_A).addFile(fileC).commit();
 
     Snapshot child = table.currentSnapshot();
-    List<TrackedFileStruct> rootRows = readRootManifestRows(child.rootManifestLocation());
+    List<TrackedFileStruct> rootRows = readRootManifestRows(child.snapshotFileLocation());
     List<TrackedFileStruct> dataRows =
         rootRows.stream()
             .filter(r -> r.contentType() == FileContent.DATA)
@@ -362,7 +364,7 @@ public class TestV4SnapshotProducer {
     table.newDelete().deleteFile(FILE_A).validateFilesExist().commit();
 
     Snapshot child = table.currentSnapshot();
-    List<TrackedFileStruct> rootRows = readRootManifestRows(child.rootManifestLocation());
+    List<TrackedFileStruct> rootRows = readRootManifestRows(child.snapshotFileLocation());
     List<TrackedFileStruct> dataRows =
         rootRows.stream()
             .filter(r -> r.contentType() == FileContent.DATA)
@@ -389,7 +391,7 @@ public class TestV4SnapshotProducer {
     Snapshot snap = table.currentSnapshot();
     List<DataFile> directRows =
         RootManifestReader.readDirectDataRows(
-            table.io().newInputFile(snap.rootManifestLocation()),
+            table.io().newInputFile(snap.snapshotFileLocation()),
             table.ops().current().specsById());
 
     assertThat(directRows).hasSize(2);
@@ -423,14 +425,14 @@ public class TestV4SnapshotProducer {
 
     Snapshot snap = table.currentSnapshot();
     assertThat(snap).isNotNull();
-    assertThat(snap.rootManifestLocation()).isNotNull().endsWith(".parquet");
+    assertThat(snap.snapshotFileLocation()).isNotNull().endsWith(".parquet");
     // Phase 4d: the virtual manifest over the root's direct rows is the only data manifest.
     assertThat(snap.dataManifests(table.io()))
         .as("below-target buffer stays inline; only the virtual root-direct-rows manifest surfaces")
         .hasSize(1)
-        .allSatisfy(m -> assertThat(m.path()).isEqualTo(snap.rootManifestLocation()));
+        .allSatisfy(m -> assertThat(m.path()).isEqualTo(snap.snapshotFileLocation()));
 
-    List<TrackedFileStruct> rootRows = readRootManifestRows(snap.rootManifestLocation());
+    List<TrackedFileStruct> rootRows = readRootManifestRows(snap.snapshotFileLocation());
     assertThat(rootRows).as("both injected rows must land as root direct rows").hasSize(2);
     assertThat(rootRows)
         .allSatisfy(
@@ -450,10 +452,7 @@ public class TestV4SnapshotProducer {
    */
   @Test
   public void testAdaptiveTreeDrainInjectedRowsSpillToLeaf() throws IOException {
-    table
-        .updateProperties()
-        .set(TableProperties.MANIFEST_TARGET_SIZE_BYTES, "1")
-        .commit();
+    table.updateProperties().set(TableProperties.MANIFEST_TARGET_SIZE_BYTES, "1").commit();
 
     AppendFiles append = table.newAppend();
     @SuppressWarnings("unchecked")
@@ -469,7 +468,7 @@ public class TestV4SnapshotProducer {
     List<ManifestFile> leaves = snap.dataManifests(table.io());
     assertThat(leaves).as("with target-size=1 every row exceeds the spill threshold").isNotEmpty();
 
-    List<TrackedFileStruct> rootRows = readRootManifestRows(snap.rootManifestLocation());
+    List<TrackedFileStruct> rootRows = readRootManifestRows(snap.snapshotFileLocation());
     assertThat(rootRows)
         .filteredOn(row -> row.contentType() == FileContent.DATA_MANIFEST)
         .as("spilled leaves surface as DATA_MANIFEST references in the root")
@@ -486,10 +485,7 @@ public class TestV4SnapshotProducer {
    */
   @Test
   public void testAdaptiveTreeMixedSpillAndDirectRows() throws IOException {
-    table
-        .updateProperties()
-        .set(TableProperties.MANIFEST_TARGET_SIZE_BYTES, "1000")
-        .commit();
+    table.updateProperties().set(TableProperties.MANIFEST_TARGET_SIZE_BYTES, "1000").commit();
 
     List<DataFile> files = Lists.newArrayList();
     for (int i = 0; i < 7; i++) {
@@ -508,10 +504,10 @@ public class TestV4SnapshotProducer {
     append.commit();
 
     Snapshot snap = table.currentSnapshot();
-    assertThat(snap.rootManifestLocation()).isNotNull().endsWith(".parquet");
+    assertThat(snap.snapshotFileLocation()).isNotNull().endsWith(".parquet");
 
     // Root manifest carries 1 DATA_MANIFEST reference (the spilled leaf) + 2 DATA direct rows.
-    List<TrackedFileStruct> rootRows = readRootManifestRows(snap.rootManifestLocation());
+    List<TrackedFileStruct> rootRows = readRootManifestRows(snap.snapshotFileLocation());
     List<TrackedFileStruct> dataManifestRefs =
         rootRows.stream()
             .filter(r -> r.contentType() == FileContent.DATA_MANIFEST)
@@ -534,12 +530,12 @@ public class TestV4SnapshotProducer {
     assertThat(dataManifests).hasSize(2);
     ManifestFile virtual =
         dataManifests.stream()
-            .filter(m -> m.path().equals(snap.rootManifestLocation()))
+            .filter(m -> m.path().equals(snap.snapshotFileLocation()))
             .findFirst()
             .orElseThrow(() -> new AssertionError("virtual manifest missing"));
     ManifestFile realLeaf =
         dataManifests.stream()
-            .filter(m -> !m.path().equals(snap.rootManifestLocation()))
+            .filter(m -> !m.path().equals(snap.snapshotFileLocation()))
             .findFirst()
             .orElseThrow(() -> new AssertionError("real leaf manifest missing"));
     assertThat(virtual.addedFilesCount()).isEqualTo(2);
@@ -568,10 +564,7 @@ public class TestV4SnapshotProducer {
    */
   @Test
   public void testAdaptiveTreeMultiCommitOnMixedParent() throws IOException {
-    table
-        .updateProperties()
-        .set(TableProperties.MANIFEST_TARGET_SIZE_BYTES, "1000")
-        .commit();
+    table.updateProperties().set(TableProperties.MANIFEST_TARGET_SIZE_BYTES, "1000").commit();
 
     // Snap 1: 7 files → one leaf of 5 (files 0..4) + two direct rows (files 5, 6).
     List<DataFile> parentFiles = Lists.newArrayList();
@@ -621,12 +614,11 @@ public class TestV4SnapshotProducer {
 
     // Sanity: the retired direct-row file surfaces as a DELETED direct row on the child's root,
     // confirming Phase 4b routed the retirement through filterV4AdaptiveParentDirectRows.
-    List<TrackedFileStruct> childRootRows = readRootManifestRows(child.rootManifestLocation());
+    List<TrackedFileStruct> childRootRows = readRootManifestRows(child.snapshotFileLocation());
     assertThat(childRootRows)
         .filteredOn(
             r ->
-                r.contentType() == FileContent.DATA
-                    && r.tracking().status() == EntryStatus.DELETED)
+                r.contentType() == FileContent.DATA && r.tracking().status() == EntryStatus.DELETED)
         .extracting(TrackedFileStruct::location)
         .containsExactly(parentDirectToDelete.location());
   }
@@ -646,7 +638,7 @@ public class TestV4SnapshotProducer {
     List<ManifestFile> dataManifests = snap.dataManifests(table.io());
     assertThat(dataManifests).hasSize(1);
     ManifestFile virtual = dataManifests.get(0);
-    assertThat(virtual.path()).isEqualTo(snap.rootManifestLocation());
+    assertThat(virtual.path()).isEqualTo(snap.snapshotFileLocation());
     assertThat(virtual.addedFilesCount()).isEqualTo(2);
     assertThat(virtual.snapshotId()).isEqualTo(snap.snapshotId());
     assertThat(virtual.content()).isEqualTo(ManifestContent.DATA);
