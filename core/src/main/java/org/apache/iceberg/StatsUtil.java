@@ -21,15 +21,26 @@ package org.apache.iceberg;
 import static org.apache.iceberg.types.Types.NestedField.optional;
 import static org.apache.iceberg.types.Types.NestedField.required;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.nio.ByteBuffer;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
+import org.apache.iceberg.transforms.PartitionSpecVisitor;
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.TypeUtil;
 import org.apache.iceberg.types.Types;
+import org.apache.iceberg.util.BinaryUtil;
+import org.apache.iceberg.util.UnicodeUtil;
 
 class StatsUtil {
   private StatsUtil() {}
@@ -324,5 +335,176 @@ class StatsUtil {
     }
 
     return true;
+  }
+
+  /** Inclusive bounds on a source column. Upper is null when no finite upper bound exists. */
+  record Bounds(Object lower, Object upper) {}
+
+  /**
+   * Returns source column bounds for a partition value, or null for a null value or void field.
+   *
+   * @throws UnsupportedOperationException if the field's transform does not preserve order
+   */
+  static Bounds sourceBounds(Schema schema, PartitionField field, Object partitionValue) {
+    Type sourceType = schema.findType(field.sourceId());
+    Preconditions.checkArgument(
+        sourceType != null, "Cannot find source column for partition field: %s", field);
+    return PartitionSpecVisitor.visit(
+        schema, field, new SourceBoundsVisitor(sourceType, partitionValue));
+  }
+
+  private static class SourceBoundsVisitor implements PartitionSpecVisitor<Bounds> {
+    private static final OffsetDateTime EPOCH =
+        OffsetDateTime.ofInstant(Instant.EPOCH, ZoneOffset.UTC);
+
+    private final Type sourceType;
+    private final Object value;
+
+    private SourceBoundsVisitor(Type sourceType, Object value) {
+      this.sourceType = sourceType;
+      this.value = value;
+    }
+
+    @Override
+    public Bounds identity(int fieldId, String sourceName, int sourceId) {
+      if (value == null) {
+        return null;
+      }
+
+      // the partition value may predate type promotion of the source column
+      Object bound =
+          switch (sourceType.typeId()) {
+            case LONG -> ((Number) value).longValue();
+            case DOUBLE -> ((Number) value).doubleValue();
+            default -> value;
+          };
+
+      // NaN cannot be a bound
+      if (bound instanceof Double d && d.isNaN() || bound instanceof Float f && f.isNaN()) {
+        return null;
+      }
+
+      return new Bounds(bound, bound);
+    }
+
+    @Override
+    public Bounds truncate(int fieldId, String sourceName, int sourceId, int width) {
+      if (value == null) {
+        return null;
+      }
+
+      return switch (sourceType.typeId()) {
+        case INTEGER -> {
+          int lower = (Integer) value;
+          yield new Bounds(lower, (int) Math.min(Integer.MAX_VALUE, (long) lower + width - 1));
+        }
+        case LONG -> {
+          long lower = ((Number) value).longValue();
+          yield new Bounds(
+              lower, lower > Long.MAX_VALUE - (width - 1) ? Long.MAX_VALUE : lower + width - 1);
+        }
+        case DECIMAL -> {
+          BigDecimal lower = (BigDecimal) value;
+          BigInteger unscaledUpper = lower.unscaledValue().add(BigInteger.valueOf(width - 1));
+          yield new Bounds(lower, new BigDecimal(unscaledUpper, lower.scale()));
+        }
+        case STRING -> truncatedString(value.toString(), width);
+        case BINARY -> truncatedBinary((ByteBuffer) value, width);
+        default ->
+            throw new UnsupportedOperationException("Unsupported truncate source: " + sourceType);
+      };
+    }
+
+    // a value shorter than the width was not truncated
+    private static Bounds truncatedString(String prefix, int width) {
+      if (prefix.codePointCount(0, prefix.length()) < width) {
+        return new Bounds(prefix, prefix);
+      }
+
+      // the extra character forces the prefix to be incremented
+      return new Bounds(prefix, UnicodeUtil.truncateStringMax(prefix + "\u0000", width));
+    }
+
+    private static Bounds truncatedBinary(ByteBuffer prefix, int width) {
+      if (prefix.remaining() < width) {
+        return new Bounds(prefix, prefix);
+      }
+
+      ByteBuffer extended = ByteBuffer.allocate(prefix.remaining() + 1);
+      extended.put(prefix.duplicate()).put((byte) 0).flip();
+      return new Bounds(prefix, BinaryUtil.truncateBinaryMax(extended, width));
+    }
+
+    @Override
+    public Bounds year(int fieldId, String sourceName, int sourceId) {
+      return temporal(ChronoUnit.YEARS);
+    }
+
+    @Override
+    public Bounds month(int fieldId, String sourceName, int sourceId) {
+      return temporal(ChronoUnit.MONTHS);
+    }
+
+    @Override
+    public Bounds day(int fieldId, String sourceName, int sourceId) {
+      return temporal(ChronoUnit.DAYS);
+    }
+
+    @Override
+    public Bounds hour(int fieldId, String sourceName, int sourceId) {
+      return temporal(ChronoUnit.HOURS);
+    }
+
+    // values in partition p are in [epoch + p units, epoch + (p + 1) units)
+    private Bounds temporal(ChronoUnit unit) {
+      if (value == null) {
+        return null;
+      }
+
+      long periods = (Integer) value;
+      return switch (sourceType.typeId()) {
+        case DATE -> {
+          LocalDate epoch = LocalDate.ofEpochDay(0);
+          yield new Bounds(
+              (int) epoch.plus(periods, unit).toEpochDay(),
+              (int) epoch.plus(periods + 1, unit).toEpochDay() - 1);
+        }
+        case TIMESTAMP ->
+            new Bounds(
+                since(ChronoUnit.MICROS, EPOCH.plus(periods, unit)),
+                before(since(ChronoUnit.MICROS, EPOCH.plus(periods + 1, unit))));
+        case TIMESTAMP_NANO ->
+            new Bounds(
+                since(ChronoUnit.NANOS, EPOCH.plus(periods, unit)),
+                before(since(ChronoUnit.NANOS, EPOCH.plus(periods + 1, unit))));
+        default ->
+            throw new UnsupportedOperationException("Unsupported temporal source: " + sourceType);
+      };
+    }
+
+    // Saturate on overflow.
+    private static long since(ChronoUnit unit, OffsetDateTime time) {
+      try {
+        return unit.between(EPOCH, time);
+      } catch (ArithmeticException e) {
+        return time.isBefore(EPOCH) ? Long.MIN_VALUE : Long.MAX_VALUE;
+      }
+    }
+
+    private static long before(long exclusiveUpper) {
+      boolean saturated = exclusiveUpper == Long.MAX_VALUE || exclusiveUpper == Long.MIN_VALUE;
+      return saturated ? exclusiveUpper : exclusiveUpper - 1;
+    }
+
+    @Override
+    public Bounds alwaysNull(int fieldId, String sourceName, int sourceId) {
+      return null;
+    }
+
+    @Override
+    public Bounds bucket(int fieldId, String sourceName, int sourceId, int numBuckets) {
+      throw new UnsupportedOperationException(
+          "Cannot derive source column bounds from bucket partition field: " + sourceName);
+    }
   }
 }
