@@ -1079,13 +1079,13 @@ Inheritance does not apply to v1, which does not have inherited fields like sequ
 
 ##### Commit Timestamp Inheritance
 
-In v4 and later, the `snapshot_timestamp` tracking field records the commit time (the snapshot's `timestamp-ms`, in microseconds) of the snapshot that added or last modified a file's data, and is used to assign `_last_updated_time` for [row lineage](#row-lineage).
+In v4 and later, the `snapshot_timestamp` tracking field records the commit time (the snapshot's `timestamp-ms` converted to microseconds) of the snapshot that added or last modified a file's data, and is used to assign `_last_updated_time` for [row lineage](#row-lineage).
 
 The snapshot's `timestamp-ms` is not known until the snapshot is successfully committed and may change when a commit is retried, so writers set `snapshot_timestamp` to `null` when the value must come from the committing snapshot. Writers must set `snapshot_timestamp` for data file and leaf manifest entries as follows:
 
 * An ADDED entry must have a `null` `snapshot_timestamp`.
-* An entry MODIFIED by column files must have a `null` `snapshot_timestamp`, so that modified rows inherit the snapshot's `timestamp-ms`.
-* Any other entry written to a new manifest must have its inherited or persisted `snapshot_timestamp`.
+* An entry MODIFIED by column files must have a `null` `snapshot_timestamp`.
+* Any other entry written to a new manifest must have its inherited or previously persisted `snapshot_timestamp`.
 
 When reading, a `null` commit timestamp of an ADDED or MODIFIED entry is inherited:
 
