@@ -24,6 +24,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.util.Comparator;
+import java.util.Set;
 import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
 import org.apache.iceberg.transforms.Transform;
@@ -157,9 +158,13 @@ class TestStatsUtilSourceBounds {
 
     Comparator<Object> partitionComparator =
         Comparators.forType(field.transform().getResultType(testCase.type()).asPrimitiveType());
+    Object expectedLower =
+        isLowerWidened(testCase, field, partitionValue)
+            ? (Integer) partitionValue - 1
+            : partitionValue;
     assertThat(apply(field, testCase.type(), bounds.lower()))
         .usingComparator(partitionComparator)
-        .isEqualTo(partitionValue);
+        .isEqualTo(expectedLower);
     if (testCase.exactUpper()) {
       assertThat(apply(field, testCase.type(), bounds.upper()))
           .usingComparator(partitionComparator)
@@ -295,6 +300,14 @@ class TestStatsUtilSourceBounds {
 
   private static PartitionField field(Type type, UnaryOperator<PartitionSpec.Builder> transform) {
     return transform.apply(PartitionSpec.builderFor(schema(type))).build().fields().get(0);
+  }
+
+  private static boolean isLowerWidened(
+      Case testCase, PartitionField field, Object partitionValue) {
+    String transform = field.transform().toString();
+    boolean temporal = Set.of("year", "month", "day", "hour").contains(transform);
+    boolean dateDay = testCase.type().typeId() == Type.TypeID.DATE && transform.equals("day");
+    return temporal && !dateDay && (Integer) partitionValue <= 0;
   }
 
   @SuppressWarnings({"unchecked", "rawtypes"})

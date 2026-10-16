@@ -462,20 +462,23 @@ class StatsUtil {
       }
 
       long periods = (Integer) value;
+      // old writers stored p + 1 for values in a period p < 0
+      long lowerPeriods = periods <= 0 ? periods - 1 : periods;
       return switch (sourceType.typeId()) {
         case DATE -> {
           LocalDate epoch = LocalDate.ofEpochDay(0);
+          long dateLowerPeriods = unit == ChronoUnit.DAYS ? periods : lowerPeriods;
           yield new Bounds(
-              (int) epoch.plus(periods, unit).toEpochDay(),
+              (int) epoch.plus(dateLowerPeriods, unit).toEpochDay(),
               (int) epoch.plus(periods + 1, unit).toEpochDay() - 1);
         }
         case TIMESTAMP ->
             new Bounds(
-                since(ChronoUnit.MICROS, EPOCH.plus(periods, unit)),
+                since(ChronoUnit.MICROS, EPOCH.plus(lowerPeriods, unit)),
                 before(since(ChronoUnit.MICROS, EPOCH.plus(periods + 1, unit))));
         case TIMESTAMP_NANO ->
             new Bounds(
-                since(ChronoUnit.NANOS, EPOCH.plus(periods, unit)),
+                since(ChronoUnit.NANOS, EPOCH.plus(lowerPeriods, unit)),
                 before(since(ChronoUnit.NANOS, EPOCH.plus(periods + 1, unit))));
         default ->
             throw new UnsupportedOperationException("Unsupported temporal source: " + sourceType);
