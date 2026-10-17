@@ -49,12 +49,28 @@ class MapBackedContentStats implements ContentStats {
   }
 
   MapBackedContentStats wrap(ContentFile<?> file) {
-    this.valueCounts = file.valueCounts();
-    this.nullValueCounts = file.nullValueCounts();
-    this.nanValueCounts = file.nanValueCounts();
-    this.avgValueSizes = file.avgValueSizes();
-    this.lowerBounds = file.lowerBounds();
-    this.upperBounds = file.upperBounds();
+    return wrap(
+        file.valueCounts(),
+        file.nullValueCounts(),
+        file.nanValueCounts(),
+        file.avgValueSizes(),
+        file.lowerBounds(),
+        file.upperBounds());
+  }
+
+  MapBackedContentStats wrap(
+      Map<Integer, Long> newValueCounts,
+      Map<Integer, Long> newNullValueCounts,
+      Map<Integer, Long> newNanValueCounts,
+      Map<Integer, Integer> newAvgValueSizes,
+      Map<Integer, ByteBuffer> newLowerBounds,
+      Map<Integer, ByteBuffer> newUpperBounds) {
+    this.valueCounts = newValueCounts;
+    this.nullValueCounts = newNullValueCounts;
+    this.nanValueCounts = newNanValueCounts;
+    this.avgValueSizes = newAvgValueSizes;
+    this.lowerBounds = newLowerBounds;
+    this.upperBounds = newUpperBounds;
     this.type = null;
     return this;
   }

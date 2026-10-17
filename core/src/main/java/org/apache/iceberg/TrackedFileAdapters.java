@@ -20,11 +20,16 @@ package org.apache.iceberg;
 
 import java.io.Serializable;
 import java.nio.ByteBuffer;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
+import org.apache.iceberg.relocated.com.google.common.collect.Maps;
+import org.apache.iceberg.types.Comparators;
+import org.apache.iceberg.types.Conversions;
+import org.apache.iceberg.types.Type;
 
 /**
  * Adapts between the {@link TrackedFile} model and the {@link DataFile} / {@link DeleteFile} /
@@ -60,8 +65,8 @@ class TrackedFileAdapters {
   }
 
   /** Returns a reusable adapter from {@link DataFile} to {@link TrackedFile}. */
-  static DataTrackedFile forDataFile(Schema tableSchema) {
-    return new DataTrackedFile(tableSchema);
+  static DataTrackedFile forDataFile(Schema tableSchema, PartitionSpec spec) {
+    return new DataTrackedFile(tableSchema, spec);
   }
 
   /** Returns a reusable adapter from {@link ManifestFile} to {@link TrackedFile}. */
@@ -523,6 +528,8 @@ class TrackedFileAdapters {
 
   /** Adapts a {@link DataFile} to {@link TrackedFile}. */
   static class DataTrackedFile implements TrackedFile {
+    private final Schema tableSchema;
+    private final PartitionSpec spec;
     private final MapBackedContentStats statsWrapper;
     private final WrappedEntryTracking trackingWrapper = new WrappedEntryTracking();
 
@@ -530,7 +537,10 @@ class TrackedFileAdapters {
     private DataFile file;
     private ContentStats stats;
 
-    DataTrackedFile(Schema tableSchema) {
+    DataTrackedFile(Schema tableSchema, PartitionSpec spec) {
+      Preconditions.checkArgument(spec != null, "Invalid partition spec: null");
+      this.tableSchema = tableSchema;
+      this.spec = spec;
       this.statsWrapper = new MapBackedContentStats(tableSchema);
     }
 
@@ -572,9 +582,96 @@ class TrackedFileAdapters {
           newFile.content() == FileContent.DATA,
           "Invalid content for data file: %s",
           newFile.content());
+      Preconditions.checkArgument(
+          spec.specId() == newFile.specId(),
+          "Partition spec ID %s does not match file spec ID: %s",
+          spec.specId(),
+          newFile.specId());
 
       this.file = newFile;
-      this.stats = hasContentStats(newFile) ? statsWrapper.wrap(newFile) : null;
+      this.stats = hasContentStats(newFile) ? wrapStats(newFile) : null;
+    }
+
+    private ContentStats wrapStats(DataFile dataFile) {
+      Map<Integer, CombinedSourceBounds> boundsBySourceId = combinedSourceBounds(dataFile);
+      if (boundsBySourceId.isEmpty()) {
+        return statsWrapper.wrap(dataFile);
+      }
+
+      long recordCount = dataFile.recordCount();
+      Map<Integer, Long> valueCounts = copyOf(dataFile.valueCounts());
+      Map<Integer, Long> nullValueCounts = copyOf(dataFile.nullValueCounts());
+      Map<Integer, ByteBuffer> lowerBounds = copyOf(dataFile.lowerBounds());
+      Map<Integer, ByteBuffer> upperBounds = copyOf(dataFile.upperBounds());
+
+      for (Map.Entry<Integer, CombinedSourceBounds> entry : boundsBySourceId.entrySet()) {
+        int sourceId = entry.getKey();
+        CombinedSourceBounds bounds = entry.getValue();
+        valueCounts.put(sourceId, recordCount);
+        nullValueCounts.put(sourceId, bounds.allNull ? recordCount : 0L);
+        if (bounds.allNull) {
+          lowerBounds.remove(sourceId);
+          upperBounds.remove(sourceId);
+        } else {
+          mergeBounds(sourceId, bounds, lowerBounds, upperBounds);
+        }
+      }
+
+      return statsWrapper.wrap(
+          valueCounts,
+          nullValueCounts,
+          dataFile.nanValueCounts(),
+          dataFile.avgValueSizes(),
+          lowerBounds,
+          upperBounds);
+    }
+
+    private Map<Integer, CombinedSourceBounds> combinedSourceBounds(DataFile dataFile) {
+      Map<Integer, CombinedSourceBounds> boundsBySourceId = Maps.newHashMap();
+      List<PartitionField> fields = spec.fields();
+      for (int pos = 0; pos < fields.size(); pos += 1) {
+        PartitionField field = fields.get(pos);
+        int sourceId = field.sourceId();
+        if (field.transform().isVoid() || tableSchema.findField(sourceId) == null) {
+          continue;
+        }
+
+        Object value = dataFile.partition().get(pos, Object.class);
+        StatsUtil.SourceBounds bounds =
+            StatsUtil.orderPreservingSourceBounds(tableSchema, field, value);
+        CombinedSourceBounds combinedBounds =
+            boundsBySourceId.computeIfAbsent(
+                sourceId, id -> new CombinedSourceBounds(comparator(id)));
+        combinedBounds.add(value == null, bounds);
+      }
+
+      return boundsBySourceId;
+    }
+
+    private void mergeBounds(
+        int sourceId,
+        CombinedSourceBounds bounds,
+        Map<Integer, ByteBuffer> lowerBounds,
+        Map<Integer, ByteBuffer> upperBounds) {
+      Type fieldType = tableSchema.findType(sourceId);
+      Comparator<Object> comparator = bounds.comparator;
+      Object fileLower = Conversions.fromByteBuffer(fieldType, lowerBounds.get(sourceId));
+      Object fileUpper = Conversions.fromByteBuffer(fieldType, upperBounds.get(sourceId));
+      Object lower = max(comparator, bounds.lower, fileLower);
+      Object upper = min(comparator, bounds.upper, fileUpper);
+
+      // file bounds that do not overlap the partition are not valid, so use the partition bounds
+      if (lower != null && upper != null && comparator.compare(lower, upper) > 0) {
+        lower = bounds.lower;
+        upper = bounds.upper;
+      }
+
+      putBound(lowerBounds, sourceId, fieldType, lower);
+      putBound(upperBounds, sourceId, fieldType, upper);
+    }
+
+    private Comparator<Object> comparator(int sourceId) {
+      return Comparators.forType(tableSchema.findType(sourceId).asPrimitiveType());
     }
 
     @Override
@@ -1010,6 +1107,62 @@ class TrackedFileAdapters {
 
   private static boolean isPresent(Map<?, ?> map) {
     return map != null && !map.isEmpty();
+  }
+
+  private static <V> Map<Integer, V> copyOf(Map<Integer, V> map) {
+    return map != null ? Maps.newHashMap(map) : Maps.newHashMap();
+  }
+
+  private static void putBound(
+      Map<Integer, ByteBuffer> bounds, int fieldId, Type fieldType, Object value) {
+    if (value != null) {
+      bounds.put(fieldId, Conversions.toByteBuffer(fieldType, value));
+    } else {
+      bounds.remove(fieldId);
+    }
+  }
+
+  private static Object max(Comparator<Object> comparator, Object left, Object right) {
+    if (left == null) {
+      return right;
+    } else if (right == null) {
+      return left;
+    }
+
+    return comparator.compare(left, right) >= 0 ? left : right;
+  }
+
+  private static Object min(Comparator<Object> comparator, Object left, Object right) {
+    if (left == null) {
+      return right;
+    } else if (right == null) {
+      return left;
+    }
+
+    return comparator.compare(left, right) <= 0 ? left : right;
+  }
+
+  /**
+   * Combined source bounds for one source column from all partition fields of one file. Null
+   * means unbounded.
+   */
+  private static class CombinedSourceBounds {
+    private final Comparator<Object> comparator;
+    private Object lower = null;
+    private Object upper = null;
+    private boolean allNull = false;
+
+    private CombinedSourceBounds(Comparator<Object> comparator) {
+      this.comparator = comparator;
+    }
+
+    private void add(boolean isNull, StatsUtil.SourceBounds bounds) {
+      this.allNull = allNull || isNull;
+      if (bounds != null) {
+        this.lower = max(comparator, lower, bounds.lower());
+        this.upper = min(comparator, upper, bounds.upper());
+      }
+    }
   }
 
   /**
