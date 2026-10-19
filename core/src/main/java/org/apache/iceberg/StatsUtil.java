@@ -397,29 +397,37 @@ class StatsUtil {
       }
 
       return switch (sourceType.typeId()) {
+        // The partition value starts a block of width values, so the block ends at it plus width
+        // minus 1. Negative values move down to their block start, so -3 with width 10 gives -10.
         case INTEGER -> {
           int lower = (Integer) value;
           yield new SourceBounds(
               lower, (int) Math.min(Integer.MAX_VALUE, (long) lower + width - 1));
         }
+        // Long values use the same blocks as integer values.
         case LONG -> {
           long lower = ((Number) value).longValue();
           yield new SourceBounds(
               lower, lower > Long.MAX_VALUE - (width - 1) ? Long.MAX_VALUE : lower + width - 1);
         }
+        // The same blocks apply to the unscaled value. The upper bound adds width minus 1 to the
+        // unscaled value and keeps the same scale.
         case DECIMAL -> {
           BigDecimal lower = (BigDecimal) value;
           BigInteger unscaledUpper = lower.unscaledValue().add(BigInteger.valueOf(width - 1));
           yield new SourceBounds(lower, new BigDecimal(unscaledUpper, lower.scale()));
         }
+        // The partition value is a prefix. Values with that prefix sort at or after it and below
+        // the next prefix value.
         case STRING -> truncatedString(value.toString(), width);
+        // The partition value is a byte prefix. The bounds work the same way as for strings.
         case BINARY -> truncatedBinary((ByteBuffer) value, width);
         default ->
             throw new UnsupportedOperationException("Unsupported truncate source: " + sourceType);
       };
     }
 
-    // a value shorter than the width was not truncated
+    // A value shorter than the width was not truncated, so the bounds are exact.
     private static SourceBounds truncatedString(String prefix, int width) {
       if (prefix.codePointCount(0, prefix.length()) < width) {
         return new SourceBounds(prefix, prefix);
@@ -429,11 +437,13 @@ class StatsUtil {
       return new SourceBounds(prefix, UnicodeUtil.truncateStringMax(prefix + "\u0000", width));
     }
 
+    // A value shorter than the width was not truncated, so the bounds are exact.
     private static SourceBounds truncatedBinary(ByteBuffer prefix, int width) {
       if (prefix.remaining() < width) {
         return new SourceBounds(prefix, prefix);
       }
 
+      // The extra zero byte forces the prefix to be incremented.
       ByteBuffer extended = ByteBuffer.allocate(prefix.remaining() + 1);
       extended.put(prefix.duplicate()).put((byte) 0).flip();
       return new SourceBounds(prefix, BinaryUtil.truncateBinaryMax(extended, width));
