@@ -338,35 +338,38 @@ class StatsUtil {
   }
 
   /** Inclusive bounds on a source column. Upper is null when no finite upper bound exists. */
-  record Bounds(Object lower, Object upper) {}
+  record SourceBounds(Object lower, Object upper) {}
 
   /**
-   * Returns source column bounds for a partition value, or null for a null value or void field.
+   * Returns source column bounds for a partition value. Only works for transforms that preserve
+   * order. Returns null for a null value or void field.
    *
    * @throws UnsupportedOperationException if the field's transform does not preserve order
    */
-  static Bounds sourceBounds(Schema schema, PartitionField field, Object partitionValue) {
+  static SourceBounds orderPreservingSourceBounds(
+      Schema schema, PartitionField field, Object partitionValue) {
     Type sourceType = schema.findType(field.sourceId());
     Preconditions.checkArgument(
         sourceType != null, "Cannot find source column for partition field: %s", field);
     return PartitionSpecVisitor.visit(
-        schema, field, new SourceBoundsVisitor(sourceType, partitionValue));
+        schema, field, new OrderPreservingSourceBoundsVisitor(sourceType, partitionValue));
   }
 
-  private static class SourceBoundsVisitor implements PartitionSpecVisitor<Bounds> {
+  private static class OrderPreservingSourceBoundsVisitor
+      implements PartitionSpecVisitor<SourceBounds> {
     private static final OffsetDateTime EPOCH =
         OffsetDateTime.ofInstant(Instant.EPOCH, ZoneOffset.UTC);
 
     private final Type sourceType;
     private final Object value;
 
-    private SourceBoundsVisitor(Type sourceType, Object value) {
+    private OrderPreservingSourceBoundsVisitor(Type sourceType, Object value) {
       this.sourceType = sourceType;
       this.value = value;
     }
 
     @Override
-    public Bounds identity(int fieldId, String sourceName, int sourceId) {
+    public SourceBounds identity(int fieldId, String sourceName, int sourceId) {
       if (value == null) {
         return null;
       }
@@ -384,11 +387,11 @@ class StatsUtil {
         return null;
       }
 
-      return new Bounds(bound, bound);
+      return new SourceBounds(bound, bound);
     }
 
     @Override
-    public Bounds truncate(int fieldId, String sourceName, int sourceId, int width) {
+    public SourceBounds truncate(int fieldId, String sourceName, int sourceId, int width) {
       if (value == null) {
         return null;
       }
@@ -396,17 +399,18 @@ class StatsUtil {
       return switch (sourceType.typeId()) {
         case INTEGER -> {
           int lower = (Integer) value;
-          yield new Bounds(lower, (int) Math.min(Integer.MAX_VALUE, (long) lower + width - 1));
+          yield new SourceBounds(
+              lower, (int) Math.min(Integer.MAX_VALUE, (long) lower + width - 1));
         }
         case LONG -> {
           long lower = ((Number) value).longValue();
-          yield new Bounds(
+          yield new SourceBounds(
               lower, lower > Long.MAX_VALUE - (width - 1) ? Long.MAX_VALUE : lower + width - 1);
         }
         case DECIMAL -> {
           BigDecimal lower = (BigDecimal) value;
           BigInteger unscaledUpper = lower.unscaledValue().add(BigInteger.valueOf(width - 1));
-          yield new Bounds(lower, new BigDecimal(unscaledUpper, lower.scale()));
+          yield new SourceBounds(lower, new BigDecimal(unscaledUpper, lower.scale()));
         }
         case STRING -> truncatedString(value.toString(), width);
         case BINARY -> truncatedBinary((ByteBuffer) value, width);
@@ -416,47 +420,47 @@ class StatsUtil {
     }
 
     // a value shorter than the width was not truncated
-    private static Bounds truncatedString(String prefix, int width) {
+    private static SourceBounds truncatedString(String prefix, int width) {
       if (prefix.codePointCount(0, prefix.length()) < width) {
-        return new Bounds(prefix, prefix);
+        return new SourceBounds(prefix, prefix);
       }
 
       // the extra character forces the prefix to be incremented
-      return new Bounds(prefix, UnicodeUtil.truncateStringMax(prefix + "\u0000", width));
+      return new SourceBounds(prefix, UnicodeUtil.truncateStringMax(prefix + "\u0000", width));
     }
 
-    private static Bounds truncatedBinary(ByteBuffer prefix, int width) {
+    private static SourceBounds truncatedBinary(ByteBuffer prefix, int width) {
       if (prefix.remaining() < width) {
-        return new Bounds(prefix, prefix);
+        return new SourceBounds(prefix, prefix);
       }
 
       ByteBuffer extended = ByteBuffer.allocate(prefix.remaining() + 1);
       extended.put(prefix.duplicate()).put((byte) 0).flip();
-      return new Bounds(prefix, BinaryUtil.truncateBinaryMax(extended, width));
+      return new SourceBounds(prefix, BinaryUtil.truncateBinaryMax(extended, width));
     }
 
     @Override
-    public Bounds year(int fieldId, String sourceName, int sourceId) {
+    public SourceBounds year(int fieldId, String sourceName, int sourceId) {
       return temporal(ChronoUnit.YEARS);
     }
 
     @Override
-    public Bounds month(int fieldId, String sourceName, int sourceId) {
+    public SourceBounds month(int fieldId, String sourceName, int sourceId) {
       return temporal(ChronoUnit.MONTHS);
     }
 
     @Override
-    public Bounds day(int fieldId, String sourceName, int sourceId) {
+    public SourceBounds day(int fieldId, String sourceName, int sourceId) {
       return temporal(ChronoUnit.DAYS);
     }
 
     @Override
-    public Bounds hour(int fieldId, String sourceName, int sourceId) {
+    public SourceBounds hour(int fieldId, String sourceName, int sourceId) {
       return temporal(ChronoUnit.HOURS);
     }
 
     // values in partition p are in [epoch + p units, epoch + (p + 1) units)
-    private Bounds temporal(ChronoUnit unit) {
+    private SourceBounds temporal(ChronoUnit unit) {
       if (value == null) {
         return null;
       }
@@ -468,16 +472,16 @@ class StatsUtil {
         case DATE -> {
           LocalDate epoch = LocalDate.ofEpochDay(0);
           long dateLowerPeriods = unit == ChronoUnit.DAYS ? periods : lowerPeriods;
-          yield new Bounds(
+          yield new SourceBounds(
               (int) epoch.plus(dateLowerPeriods, unit).toEpochDay(),
               (int) epoch.plus(periods + 1, unit).toEpochDay() - 1);
         }
         case TIMESTAMP ->
-            new Bounds(
+            new SourceBounds(
                 since(ChronoUnit.MICROS, EPOCH.plus(lowerPeriods, unit)),
                 before(since(ChronoUnit.MICROS, EPOCH.plus(periods + 1, unit))));
         case TIMESTAMP_NANO ->
-            new Bounds(
+            new SourceBounds(
                 since(ChronoUnit.NANOS, EPOCH.plus(lowerPeriods, unit)),
                 before(since(ChronoUnit.NANOS, EPOCH.plus(periods + 1, unit))));
         default ->
@@ -485,7 +489,7 @@ class StatsUtil {
       };
     }
 
-    // Saturate on overflow.
+    // Use the largest value instead of overflowing.
     private static long since(ChronoUnit unit, OffsetDateTime time) {
       try {
         return unit.between(EPOCH, time);
@@ -495,17 +499,17 @@ class StatsUtil {
     }
 
     private static long before(long exclusiveUpper) {
-      boolean saturated = exclusiveUpper == Long.MAX_VALUE || exclusiveUpper == Long.MIN_VALUE;
-      return saturated ? exclusiveUpper : exclusiveUpper - 1;
+      boolean atLimit = exclusiveUpper == Long.MAX_VALUE || exclusiveUpper == Long.MIN_VALUE;
+      return atLimit ? exclusiveUpper : exclusiveUpper - 1;
     }
 
     @Override
-    public Bounds alwaysNull(int fieldId, String sourceName, int sourceId) {
+    public SourceBounds alwaysNull(int fieldId, String sourceName, int sourceId) {
       return null;
     }
 
     @Override
-    public Bounds bucket(int fieldId, String sourceName, int sourceId, int numBuckets) {
+    public SourceBounds bucket(int fieldId, String sourceName, int sourceId, int numBuckets) {
       throw new UnsupportedOperationException(
           "Cannot derive source column bounds from bucket partition field: " + sourceName);
     }

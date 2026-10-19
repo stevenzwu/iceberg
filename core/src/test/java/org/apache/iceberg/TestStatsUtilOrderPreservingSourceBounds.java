@@ -35,7 +35,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
-class TestStatsUtilSourceBounds {
+class TestStatsUtilOrderPreservingSourceBounds {
 
   private static final String COLUMN = "col";
 
@@ -150,7 +150,8 @@ class TestStatsUtilSourceBounds {
     PartitionField field = field(testCase);
     Object partitionValue = apply(field, testCase.type(), testCase.sample());
 
-    StatsUtil.Bounds bounds = StatsUtil.sourceBounds(schema(testCase), field, partitionValue);
+    StatsUtil.SourceBounds bounds =
+        StatsUtil.orderPreservingSourceBounds(schema(testCase), field, partitionValue);
 
     Comparator<Object> comparator = Comparators.forType(testCase.type().asPrimitiveType());
     assertThat(comparator.compare(bounds.lower(), testCase.sample())).isLessThanOrEqualTo(0);
@@ -178,7 +179,8 @@ class TestStatsUtilSourceBounds {
     PartitionField field = field(testCase);
     Object partitionValue = apply(field, testCase.type(), testCase.sample());
 
-    StatsUtil.Bounds bounds = StatsUtil.sourceBounds(schema(testCase), field, partitionValue);
+    StatsUtil.SourceBounds bounds =
+        StatsUtil.orderPreservingSourceBounds(schema(testCase), field, partitionValue);
 
     Comparator<Object> partitionComparator =
         Comparators.forType(field.transform().getResultType(testCase.type()).asPrimitiveType());
@@ -194,7 +196,8 @@ class TestStatsUtilSourceBounds {
   void truncatedStringUpperBoundIncrementsPrefix() {
     PartitionField field = field(Types.StringType.get(), b -> b.truncate(COLUMN, 3));
 
-    StatsUtil.Bounds bounds = StatsUtil.sourceBounds(schema(Types.StringType.get()), field, "abc");
+    StatsUtil.SourceBounds bounds =
+        StatsUtil.orderPreservingSourceBounds(schema(Types.StringType.get()), field, "abc");
 
     assertThat(bounds.lower()).isEqualTo("abc");
     assertThat(bounds.upper()).isEqualTo("abd");
@@ -204,7 +207,8 @@ class TestStatsUtilSourceBounds {
   void truncatedStringShorterThanWidthIsExact() {
     PartitionField field = field(Types.StringType.get(), b -> b.truncate(COLUMN, 3));
 
-    StatsUtil.Bounds bounds = StatsUtil.sourceBounds(schema(Types.StringType.get()), field, "ab");
+    StatsUtil.SourceBounds bounds =
+        StatsUtil.orderPreservingSourceBounds(schema(Types.StringType.get()), field, "ab");
 
     assertThat(bounds.lower()).isEqualTo("ab");
     assertThat(bounds.upper()).isEqualTo("ab");
@@ -215,31 +219,32 @@ class TestStatsUtilSourceBounds {
     PartitionField field = field(Types.StringType.get(), b -> b.truncate(COLUMN, 1));
     String maxCodePoint = new String(Character.toChars(Character.MAX_CODE_POINT));
 
-    StatsUtil.Bounds bounds =
-        StatsUtil.sourceBounds(schema(Types.StringType.get()), field, maxCodePoint);
+    StatsUtil.SourceBounds bounds =
+        StatsUtil.orderPreservingSourceBounds(schema(Types.StringType.get()), field, maxCodePoint);
 
     assertThat(bounds.lower()).isEqualTo(maxCodePoint);
     assertThat(bounds.upper()).isNull();
   }
 
   @Test
-  void truncatedIntUpperBoundSaturates() {
+  void truncatedIntUpperBoundStopsAtLargestValue() {
     PartitionField field = field(Types.IntegerType.get(), b -> b.truncate(COLUMN, 10));
 
-    StatsUtil.Bounds bounds =
-        StatsUtil.sourceBounds(schema(Types.IntegerType.get()), field, 2_147_483_640);
+    StatsUtil.SourceBounds bounds =
+        StatsUtil.orderPreservingSourceBounds(
+            schema(Types.IntegerType.get()), field, 2_147_483_640);
 
     assertThat(bounds.lower()).isEqualTo(2_147_483_640);
     assertThat(bounds.upper()).isEqualTo(Integer.MAX_VALUE);
   }
 
   @Test
-  void timestampNanoUpperBoundSaturates() {
+  void timestampNanoUpperBoundStopsAtLargestValue() {
     Type type = Types.TimestampNanoType.withZone();
     PartitionField field = field(type, b -> b.year(COLUMN));
 
     // 2262-01-01 is representable in nanos, but the end of the year is past the maximum
-    StatsUtil.Bounds bounds = StatsUtil.sourceBounds(schema(type), field, 292);
+    StatsUtil.SourceBounds bounds = StatsUtil.orderPreservingSourceBounds(schema(type), field, 292);
 
     assertThat(bounds.lower()).isEqualTo(9_214_646_400_000_000_000L);
     assertThat(bounds.upper()).isEqualTo(Long.MAX_VALUE);
@@ -249,7 +254,8 @@ class TestStatsUtilSourceBounds {
   void identityBoundsFollowPromotedSourceType() {
     PartitionField field = field(Types.IntegerType.get(), b -> b.identity(COLUMN));
 
-    StatsUtil.Bounds bounds = StatsUtil.sourceBounds(schema(Types.LongType.get()), field, 5);
+    StatsUtil.SourceBounds bounds =
+        StatsUtil.orderPreservingSourceBounds(schema(Types.LongType.get()), field, 5);
 
     assertThat(bounds.lower()).isEqualTo(5L);
     assertThat(bounds.upper()).isEqualTo(5L);
@@ -259,7 +265,9 @@ class TestStatsUtilSourceBounds {
   void nullPartitionValueHasNoBounds() {
     PartitionField field = field(Types.TimestampType.withZone(), b -> b.hour(COLUMN));
 
-    assertThat(StatsUtil.sourceBounds(schema(Types.TimestampType.withZone()), field, null))
+    assertThat(
+            StatsUtil.orderPreservingSourceBounds(
+                schema(Types.TimestampType.withZone()), field, null))
         .isNull();
   }
 
@@ -267,21 +275,25 @@ class TestStatsUtilSourceBounds {
   void nanIdentityPartitionValueHasNoBounds() {
     PartitionField field = field(Types.FloatType.get(), b -> b.identity(COLUMN));
 
-    assertThat(StatsUtil.sourceBounds(schema(Types.FloatType.get()), field, Float.NaN)).isNull();
+    assertThat(
+            StatsUtil.orderPreservingSourceBounds(schema(Types.FloatType.get()), field, Float.NaN))
+        .isNull();
   }
 
   @Test
   void voidFieldHasNoBounds() {
     PartitionField field = field(Types.StringType.get(), b -> b.alwaysNull(COLUMN));
 
-    assertThat(StatsUtil.sourceBounds(schema(Types.StringType.get()), field, null)).isNull();
+    assertThat(StatsUtil.orderPreservingSourceBounds(schema(Types.StringType.get()), field, null))
+        .isNull();
   }
 
   @Test
   void bucketFieldIsRejected() {
     PartitionField field = field(Types.StringType.get(), b -> b.bucket(COLUMN, 16));
 
-    assertThatThrownBy(() -> StatsUtil.sourceBounds(schema(Types.StringType.get()), field, 3))
+    assertThatThrownBy(
+            () -> StatsUtil.orderPreservingSourceBounds(schema(Types.StringType.get()), field, 3))
         .isInstanceOf(UnsupportedOperationException.class)
         .hasMessageContaining("bucket");
   }
