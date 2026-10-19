@@ -436,22 +436,22 @@ class StatsUtil {
       };
     }
 
-    // The spec's substring returns the whole value when it is shorter than the width, so a
-    // shorter stored value was never cut. It is the only possible value in its partition, so
-    // both bounds equal it.
     private static SourceBounds truncatedString(String prefix, int width) {
       if (prefix.codePointCount(0, prefix.length()) < width) {
+        // The spec's substring returns the whole value when it is shorter than the width, so a
+        // shorter stored value was never cut. It is the only possible value in its partition,
+        // so both bounds equal it.
         return new SourceBounds(prefix, prefix);
       }
 
       return new SourceBounds(prefix, UnicodeUtil.truncateStringMax(prefix + "\u0000", width));
     }
 
-    // The spec's subarray returns the whole value when it is shorter than the width, so a
-    // shorter stored value was never cut. It is the only possible value in its partition, so
-    // both bounds equal it.
     private static SourceBounds truncatedBinary(ByteBuffer prefix, int width) {
       if (prefix.remaining() < width) {
+        // The spec's subarray returns the whole value when it is shorter than the width, so a
+        // shorter stored value was never cut. It is the only possible value in its partition,
+        // so both bounds equal it.
         return new SourceBounds(prefix, prefix);
       }
 
