@@ -399,37 +399,37 @@ class StatsUtil {
       }
 
       return switch (sourceType.typeId()) {
-        // The partition value is the source value minus a remainder from 0 to width minus 1, so
-        // the source value runs from the partition value to the partition value plus width minus 1.
-        // The remainder stays positive, so negatives round down: -1 truncates to -10 at width 10.
+        // The spec writes the source value as the partition value plus a remainder from 0 to
+        // width minus 1. We know that the lower bound must be the partition value, and the
+        // upper bound must be the partition value plus width minus 1.
         case INTEGER -> {
           int lower = (Integer) value;
           yield new SourceBounds(
               lower, (int) Math.min(Integer.MAX_VALUE, (long) lower + width - 1));
         }
-        // The partition value is the source value minus a remainder from 0 to width minus 1, so
-        // the source value runs from the partition value to the partition value plus width minus 1.
-        // The remainder stays positive, so negatives round down: -1 truncates to -10 at width 10.
+        // The spec writes the source value as the partition value plus a remainder from 0 to
+        // width minus 1. We know that the lower bound must be the partition value, and the
+        // upper bound must be the partition value plus width minus 1.
         case LONG -> {
           long lower = ((Number) value).longValue();
           yield new SourceBounds(
               lower, lower > Long.MAX_VALUE - (width - 1) ? Long.MAX_VALUE : lower + width - 1);
         }
-        // The spec scales the width by the scale of the decimal column and applies the integer
-        // rule to the unscaled value. So a source value is the partition value plus a remainder
-        // from 0 to width minus 1 unscaled units, at the same scale.
+        // The spec uses the same remainder rule for the unscaled value of a decimal.
+        // We know that the lower bound must be the partition value, and the upper bound must
+        // be the partition value plus width minus 1 unscaled units, at the same scale.
         case DECIMAL -> {
           BigDecimal lower = (BigDecimal) value;
           BigInteger unscaledUpper = lower.unscaledValue().add(BigInteger.valueOf(width - 1));
           yield new SourceBounds(lower, new BigDecimal(unscaledUpper, lower.scale()));
         }
-        // The spec keeps the first width code points, so every source value in the partition
-        // starts with the partition value. It sorts at or after the partition value and before
-        // the first string that follows all strings with that prefix.
+        // The spec keeps the first width code points, so every value in this partition starts
+        // with the partition value. We know that the lower bound must be that value itself, and
+        // that an upper bound, when one exists, must be the first string above them all.
         case STRING -> truncatedString(value.toString(), width);
-        // The spec keeps the first width bytes, so every source value in the partition starts
-        // with the partition value. It sorts at or after the partition value and before the
-        // first byte value that follows all byte values with that prefix.
+        // The spec keeps the first width bytes, so every value in this partition starts with the
+        // partition value. We know that the lower bound must be that value itself, and that an
+        // upper bound, when one exists, must be the first binary value above them all.
         case BINARY -> truncatedBinary((ByteBuffer) value, width);
         default ->
             throw new UnsupportedOperationException("Unsupported truncate source: " + sourceType);

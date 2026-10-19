@@ -629,6 +629,13 @@ class TrackedFileAdapters {
       Map<Integer, ByteBuffer> lowerBounds = copyOf(dataFile.lowerBounds());
       Map<Integer, ByteBuffer> upperBounds = copyOf(dataFile.upperBounds());
 
+      // Every row in this file shares the same partition tuple, so we know that the source values
+      // must lie in both the partition-derived range and the range recorded for the file. We know
+      // that the merged range must be the intersection of those ranges: the larger lower bound and
+      // the smaller upper bound, with a missing bound leaving the other bound in place. If the
+      // ranges do not overlap, the partition-derived range wins. The counts are exact too: a
+      // non-null partition value means no value is null, and a null one means all values are null,
+      // so the value count and the null count follow directly from the record count.
       for (Map.Entry<Integer, StatsUtil.SourceBounds> entry : boundsBySourceId.entrySet()) {
         int sourceId = entry.getKey();
         valueCounts.put(sourceId, recordCount);
