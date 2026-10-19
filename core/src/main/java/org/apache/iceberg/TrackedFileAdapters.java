@@ -596,6 +596,12 @@ class TrackedFileAdapters {
       Set<Integer> nullSourceIds = Sets.newHashSet();
       // TODO: field resolution and transform dispatch depend only on the spec; resolve them once
       // per spec ID and apply per file instead of repeating them for every file
+      // Read each partition value from the file partition tuple. For each partition field, find
+      // its source column and derive the range of source values that the partition value and its
+      // transform allow. Keep one range per source column. When two partition fields share a
+      // source column, tighten the range to the part that fits both ranges. Record source columns
+      // whose partition value is null. Skip void transforms and source columns that are not in
+      // the table schema.
       List<PartitionField> fields = spec.fields();
       for (int pos = 0; pos < fields.size(); pos += 1) {
         PartitionField field = fields.get(pos);
@@ -619,25 +625,29 @@ class TrackedFileAdapters {
         }
       }
 
+      // If no partition field gives a range or a null value, return the stats that the file
+      // records with no change, or null if the file records no stats.
       if (boundsBySourceId.isEmpty() && nullSourceIds.isEmpty()) {
         return hasContentStats(dataFile) ? statsWrapper.wrap(dataFile) : null;
       }
 
+      // Copy the recorded valueCounts, nullValueCounts, lowerBounds, and upperBounds so that the
+      // steps below can update the copies.
       long recordCount = dataFile.recordCount();
       Map<Integer, Long> valueCounts = copyOf(dataFile.valueCounts());
       Map<Integer, Long> nullValueCounts = copyOf(dataFile.nullValueCounts());
       Map<Integer, ByteBuffer> lowerBounds = copyOf(dataFile.lowerBounds());
       Map<Integer, ByteBuffer> upperBounds = copyOf(dataFile.upperBounds());
 
-      // A data file can have stats for a source column, recorded when it was written. These stats say
-      // the values lie in a recorded range. Every row shares the partition tuple, so each value must
-      // lie in the range the partition value and its transform allow. Both must hold, so we tighten
-      // the recorded bounds to the higher of the two lower bounds and the lower of the two upper
-      // bounds. A missing bound leaves the other as it is. The tightened bounds are the strongest
-      // true statement about values, and stronger bounds prune more files at read time. One range
-      // alone loses information and can say values may lie where the other range shows they cannot.
-      // If they do not overlap, the partition range wins. A non-null partition value means valueCount
-      // equals recordCount and nullCount equals 0. A null one means all values are null.
+      // Tighten the recorded bounds and set exact counts for each source column with a range. A
+      // file can already have recorded bounds for a source column, and these bounds must hold.
+      // Every row shares the same partition tuple, so we know that every source value also lies in
+      // the partition-derived range. Both must hold, so keep the higher lower bound and the lower
+      // upper bound. A missing bound leaves the other as it is. The tightened bounds are the
+      // strongest true statement about the values, and they prune more files at read time. Using
+      // only one of the two ranges loses information. If the ranges do not overlap, use the
+      // partition-derived range. A non-null partition value means valueCount equals recordCount
+      // and nullCount equals 0.
       for (Map.Entry<Integer, StatsUtil.SourceBounds> entry : boundsBySourceId.entrySet()) {
         int sourceId = entry.getKey();
         valueCounts.put(sourceId, recordCount);
@@ -645,6 +655,8 @@ class TrackedFileAdapters {
         mergeBounds(sourceId, entry.getValue(), lowerBounds, upperBounds);
       }
 
+      // A null partition value means all source values are null. Set valueCount and nullCount to
+      // recordCount and remove the lower and upper bounds.
       for (int sourceId : nullSourceIds) {
         valueCounts.put(sourceId, recordCount);
         nullValueCounts.put(sourceId, recordCount);
@@ -652,6 +664,8 @@ class TrackedFileAdapters {
         upperBounds.remove(sourceId);
       }
 
+      // Build the result from the updated counts and bounds. Pass the NaN counts and average value
+      // sizes through from the file.
       return statsWrapper.wrap(
           valueCounts,
           nullValueCounts,
@@ -681,7 +695,8 @@ class TrackedFileAdapters {
       Object lower = max(comparator, bounds.lower(), fileLower);
       Object upper = min(comparator, bounds.upper(), fileUpper);
 
-      // file bounds that do not overlap the partition are not valid, so use the partition bounds
+      // We know that the partition range must hold, so use that range when the recorded bounds do
+      // not overlap it.
       if (lower != null && upper != null && comparator.compare(lower, upper) > 0) {
         lower = bounds.lower();
         upper = bounds.upper();
