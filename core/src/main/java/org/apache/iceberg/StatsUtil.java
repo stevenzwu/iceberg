@@ -399,45 +399,46 @@ class StatsUtil {
       }
 
       return switch (sourceType.typeId()) {
-        // Truncation rounds a value down to the start of its block of width values. A value here
-        // is at least the partition value and below the next block start. Ints are whole numbers,
-        // so the upper bound is the partition value plus width minus 1, up to the largest int.
+        // The partition value is the source value minus a remainder from 0 to width minus 1, so
+        // the source value runs from the partition value to the partition value plus width minus 1.
+        // The remainder stays positive, so negatives round down: -1 truncates to -10 at width 10.
         case INTEGER -> {
           int lower = (Integer) value;
           yield new SourceBounds(
               lower, (int) Math.min(Integer.MAX_VALUE, (long) lower + width - 1));
         }
-        // Truncation rounds a long down to the start of its block of width values. A value here
-        // is at least the partition value and below the next block start. So the upper bound is
-        // the partition value plus width minus 1, up to the largest long.
+        // The partition value is the source value minus a remainder from 0 to width minus 1, so
+        // the source value runs from the partition value to the partition value plus width minus 1.
+        // The remainder stays positive, so negatives round down: -1 truncates to -10 at width 10.
         case LONG -> {
           long lower = ((Number) value).longValue();
           yield new SourceBounds(
               lower, lower > Long.MAX_VALUE - (width - 1) ? Long.MAX_VALUE : lower + width - 1);
         }
-        // Truncation rounds the unscaled integer of a decimal down to its block start. The scale
-        // stays the same. So a value here is from the partition value up to width minus 1
-        // unscaled units above it, at the same scale.
+        // The spec scales the width by the scale of the decimal column and applies the integer
+        // rule to the unscaled value. So a source value is the partition value plus a remainder
+        // from 0 to width minus 1 unscaled units, at the same scale.
         case DECIMAL -> {
           BigDecimal lower = (BigDecimal) value;
           BigInteger unscaledUpper = lower.unscaledValue().add(BigInteger.valueOf(width - 1));
           yield new SourceBounds(lower, new BigDecimal(unscaledUpper, lower.scale()));
         }
-        // The partition value is a prefix, and every value in the partition starts with it. So a
-        // value sorts at or after the prefix. It sorts before the first string that comes after
-        // all strings with that prefix.
+        // The spec keeps the first width code points, so every source value in the partition
+        // starts with the partition value. It sorts at or after the partition value and before
+        // the first string that follows all strings with that prefix.
         case STRING -> truncatedString(value.toString(), width);
-        // The partition value is a byte prefix, and every value in the partition starts with it.
-        // So a value sorts at or after the prefix. It sorts before the first byte value that
-        // comes after all byte values with that prefix.
+        // The spec keeps the first width bytes, so every source value in the partition starts
+        // with the partition value. It sorts at or after the partition value and before the
+        // first byte value that follows all byte values with that prefix.
         case BINARY -> truncatedBinary((ByteBuffer) value, width);
         default ->
             throw new UnsupportedOperationException("Unsupported truncate source: " + sourceType);
       };
     }
 
-    // A stored string shorter than the width was never truncated. It is the only possible value
-    // in its partition, so both bounds equal it.
+    // The spec's substring returns the whole value when it is shorter than the width, so a
+    // shorter stored value was never cut. It is the only possible value in its partition, so
+    // both bounds equal it.
     private static SourceBounds truncatedString(String prefix, int width) {
       if (prefix.codePointCount(0, prefix.length()) < width) {
         return new SourceBounds(prefix, prefix);
@@ -446,8 +447,9 @@ class StatsUtil {
       return new SourceBounds(prefix, UnicodeUtil.truncateStringMax(prefix + "\u0000", width));
     }
 
-    // A stored byte value shorter than the width was never truncated. It is the only possible
-    // value in its partition, so both bounds equal it.
+    // The spec's subarray returns the whole value when it is shorter than the width, so a
+    // shorter stored value was never cut. It is the only possible value in its partition, so
+    // both bounds equal it.
     private static SourceBounds truncatedBinary(ByteBuffer prefix, int width) {
       if (prefix.remaining() < width) {
         return new SourceBounds(prefix, prefix);
