@@ -621,7 +621,7 @@ class TrackedFileAdapters {
             StatsUtil.orderPreservingSourceBounds(tableSchema, field, value);
         if (bounds != null) {
           boundsBySourceId.merge(
-              sourceId, bounds, (left, right) -> intersect(sourceId, left, right));
+              sourceId, bounds, (left, right) -> tightenRange(sourceId, left, right));
         }
       }
 
@@ -652,7 +652,7 @@ class TrackedFileAdapters {
         int sourceId = entry.getKey();
         valueCounts.put(sourceId, recordCount);
         nullValueCounts.put(sourceId, 0L);
-        mergeBounds(sourceId, entry.getValue(), lowerBounds, upperBounds);
+        tightenBounds(sourceId, entry.getValue(), lowerBounds, upperBounds);
       }
 
       // A null partition value means all source values are null. Set valueCount and nullCount to
@@ -675,7 +675,7 @@ class TrackedFileAdapters {
           upperBounds);
     }
 
-    private StatsUtil.SourceBounds intersect(
+    private StatsUtil.SourceBounds tightenRange(
         int sourceId, StatsUtil.SourceBounds left, StatsUtil.SourceBounds right) {
       Comparator<Object> comparator = comparator(sourceId);
       return new StatsUtil.SourceBounds(
@@ -683,7 +683,7 @@ class TrackedFileAdapters {
           min(comparator, left.upper(), right.upper()));
     }
 
-    private void mergeBounds(
+    private void tightenBounds(
         int sourceId,
         StatsUtil.SourceBounds bounds,
         Map<Integer, ByteBuffer> lowerBounds,

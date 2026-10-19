@@ -148,7 +148,7 @@ class TestDataTrackedFilePartitionStats {
   }
 
   @Test
-  void partitionFieldsOnTheSameSourceColumnAreIntersected() {
+  void partitionFieldsOnTheSameSourceColumnAreTightened() {
     PartitionSpec spec =
         PartitionSpec.builderFor(SCHEMA)
             .truncate("category", 2, "category_2")
