@@ -79,6 +79,8 @@ class TestTrackedFileAdapters {
           .identity("category")
           .withSpecId(PARTITIONED_SPEC_ID)
           .build();
+  private static final Map<Integer, PartitionSpec> PARTITIONED =
+      ImmutableMap.of(PARTITIONED_SPEC_ID, PARTITIONED_SPEC);
   private static final PartitionData PARTITION = partition("books");
 
   // these are populated by readers using the setter with the position of the field.
@@ -644,7 +646,7 @@ class TestTrackedFileAdapters {
   @Test
   void dataTrackedFileAdapterFromDataFile() {
     TrackedFile result =
-        TrackedFileAdapters.forDataFile(TABLE_SCHEMA, UNPARTITIONED_SPEC).wrap(DATA_FILE);
+        TrackedFileAdapters.forDataFile(TABLE_SCHEMA, UNPARTITIONED).wrap(DATA_FILE);
 
     assertThat(result.tracking()).isNull();
     assertWrappedDataFileMatchesFileFields(result, DATA_FILE);
@@ -653,7 +655,7 @@ class TestTrackedFileAdapters {
   @Test
   void dataTrackedFileAdapterFromExistingManifestEntry() {
     TrackedFile result =
-        TrackedFileAdapters.forDataFile(TABLE_SCHEMA, UNPARTITIONED_SPEC)
+        TrackedFileAdapters.forDataFile(TABLE_SCHEMA, UNPARTITIONED)
             .wrap(
                 newEntry()
                     .wrapExisting(
@@ -671,7 +673,7 @@ class TestTrackedFileAdapters {
   @Test
   void dataTrackedFileAdapterReuse() {
     TrackedFileAdapters.DataTrackedFile adapter =
-        TrackedFileAdapters.forDataFile(TABLE_SCHEMA, UNPARTITIONED_SPEC);
+        TrackedFileAdapters.forDataFile(TABLE_SCHEMA, UNPARTITIONED);
 
     adapter.wrap(DATA_FILE);
     assertWrappedDataFileMatchesFileFields(adapter, DATA_FILE);
@@ -700,17 +702,17 @@ class TestTrackedFileAdapters {
   @Test
   void dataTrackedFileAdapterRejectsNullFile() {
     TrackedFileAdapters.DataTrackedFile adapter =
-        TrackedFileAdapters.forDataFile(TABLE_SCHEMA, UNPARTITIONED_SPEC);
+        TrackedFileAdapters.forDataFile(TABLE_SCHEMA, UNPARTITIONED);
     assertThatThrownBy(() -> adapter.wrap((DataFile) null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("Invalid file: null");
   }
 
   @Test
-  void dataTrackedFileAdapterRejectsMismatchedSpec() {
+  void dataTrackedFileAdapterRejectsUnknownSpec() {
     TrackedFileAdapters.DataTrackedFile adapter =
-        TrackedFileAdapters.forDataFile(PARTITION_SCHEMA, PARTITIONED_SPEC);
-    DataFile mismatched =
+        TrackedFileAdapters.forDataFile(PARTITION_SCHEMA, PARTITIONED);
+    DataFile unknownSpec =
         new GenericDataFile(
             PARTITIONED_SPEC_ID + 1,
             DATA_FILE_LOCATION,
@@ -723,22 +725,22 @@ class TestTrackedFileAdapters {
             null,
             null);
 
-    assertThatThrownBy(() -> adapter.wrap(mismatched))
+    assertThatThrownBy(() -> adapter.wrap(unknownSpec))
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("does not match");
+        .hasMessageContaining("Cannot find partition spec for spec ID");
   }
 
   @Test
-  void dataTrackedFileAdapterRejectsNullSpec() {
+  void dataTrackedFileAdapterRejectsNullSpecs() {
     assertThatThrownBy(() -> TrackedFileAdapters.forDataFile(TABLE_SCHEMA, null))
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("Invalid partition spec: null");
+        .hasMessageContaining("Invalid partition specs: null");
   }
 
   @Test
   void dataTrackedFileAdapterContentStats() {
     TrackedFile result =
-        TrackedFileAdapters.forDataFile(TABLE_SCHEMA, UNPARTITIONED_SPEC)
+        TrackedFileAdapters.forDataFile(TABLE_SCHEMA, UNPARTITIONED)
             .wrap(DATA_FILE_WITH_METRICS);
 
     ContentStats stats = result.contentStats();
@@ -754,7 +756,7 @@ class TestTrackedFileAdapters {
   @Test
   void dataTrackedFileAdapterWithoutMetricsHasNoContentStats() {
     TrackedFile result =
-        TrackedFileAdapters.forDataFile(TABLE_SCHEMA, UNPARTITIONED_SPEC).wrap(DATA_FILE);
+        TrackedFileAdapters.forDataFile(TABLE_SCHEMA, UNPARTITIONED).wrap(DATA_FILE);
 
     assertThat(result.contentStats()).isNull();
   }
@@ -774,7 +776,7 @@ class TestTrackedFileAdapters {
             null,
             null);
     TrackedFile result =
-        TrackedFileAdapters.forDataFile(PARTITION_SCHEMA, PARTITIONED_SPEC).wrap(partitioned);
+        TrackedFileAdapters.forDataFile(PARTITION_SCHEMA, PARTITIONED).wrap(partitioned);
 
     assertThat(result.partition())
         .usingComparator(Comparators.forType(PARTITIONED_SPEC.partitionType()))
@@ -807,7 +809,7 @@ class TestTrackedFileAdapters {
             null);
 
     TrackedFile result =
-        TrackedFileAdapters.forDataFile(PARTITION_SCHEMA, PARTITIONED_SPEC).wrap(partitioned);
+        TrackedFileAdapters.forDataFile(PARTITION_SCHEMA, PARTITIONED).wrap(partitioned);
 
     FieldStats<?> categoryStats = result.contentStats().statsFor(1);
     assertThat(categoryStats.valueCount()).isEqualTo(100L);
@@ -819,11 +821,39 @@ class TestTrackedFileAdapters {
   }
 
   @Test
+  void dataTrackedFileAdapterContentStatsFromPartitionWithoutMetrics() {
+    TrackedFile result = partitionedAdapter().wrap(partitionedFile(PARTITIONED_SPEC_ID, PARTITION));
+
+    FieldStats<?> categoryStats = result.contentStats().statsFor(1);
+    assertThat(categoryStats.valueCount()).isEqualTo(100L);
+    assertThat(categoryStats.nullValueCount()).isEqualTo(0L);
+
+    Comparator<Object> comparator = Comparators.forType(Types.StringType.get());
+    assertThat(categoryStats.lowerBound()).usingComparator(comparator).isEqualTo("books");
+    assertThat(categoryStats.upperBound()).usingComparator(comparator).isEqualTo("books");
+  }
+
+  @Test
+  void dataTrackedFileAdapterRejectsBucketPartitionedFile() {
+    PartitionSpec bucketSpec =
+        PartitionSpec.builderFor(PARTITION_SCHEMA).bucket("category", 16).withSpecId(2).build();
+    PartitionData bucketPartition = new PartitionData(bucketSpec.partitionType());
+    bucketPartition.set(0, 3);
+    TrackedFileAdapters.DataTrackedFile adapter =
+        TrackedFileAdapters.forDataFile(
+            PARTITION_SCHEMA, ImmutableMap.of(bucketSpec.specId(), bucketSpec));
+
+    assertThatThrownBy(() -> adapter.wrap(partitionedFile(2, bucketPartition)))
+        .isInstanceOf(UnsupportedOperationException.class)
+        .hasMessageContaining("bucket");
+  }
+
+  @Test
   void dataTrackedFileAdapterUnwrapsToOriginalTrackedFile() {
     TrackedFile original = trackedFile(FileContent.DATA);
     DataFile adapted = TrackedFileAdapters.asDataFile(original, UNPARTITIONED);
     TrackedFile roundTripped =
-        TrackedFileAdapters.forDataFile(TABLE_SCHEMA, UNPARTITIONED_SPEC).wrap(adapted);
+        TrackedFileAdapters.forDataFile(TABLE_SCHEMA, UNPARTITIONED).wrap(adapted);
     assertThat(roundTripped).isSameAs(original);
   }
 
@@ -997,6 +1027,24 @@ class TestTrackedFileAdapters {
     PartitionData partition = new PartitionData(PARTITIONED_SPEC.partitionType());
     partition.set(0, category);
     return partition;
+  }
+
+  private static TrackedFileAdapters.DataTrackedFile partitionedAdapter() {
+    return TrackedFileAdapters.forDataFile(PARTITION_SCHEMA, PARTITIONED);
+  }
+
+  private static DataFile partitionedFile(int specId, PartitionData partition) {
+    return new GenericDataFile(
+        specId,
+        DATA_FILE_LOCATION,
+        FileFormat.PARQUET,
+        partition,
+        1024L,
+        new Metrics(100L, null, null, null, null),
+        null,
+        ImmutableList.of(0L),
+        null,
+        null);
   }
 
   /** Minimal file for the rejection and null-tracking tests. */
