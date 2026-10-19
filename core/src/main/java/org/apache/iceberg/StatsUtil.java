@@ -387,6 +387,8 @@ class StatsUtil {
         return null;
       }
 
+      // The partition value is the source value itself. Every row in the partition has exactly
+      // this value, so it is both the lower and upper bound.
       return new SourceBounds(bound, bound);
     }
 
@@ -397,53 +399,60 @@ class StatsUtil {
       }
 
       return switch (sourceType.typeId()) {
-        // The partition value starts a block of width values, so the block ends at it plus width
-        // minus 1. Negative values move down to their block start, so -3 with width 10 gives -10.
+        // Truncation rounds a value down to the start of its block of width values. A value here
+        // is at least the partition value and below the next block start. Ints are whole numbers,
+        // so the upper bound is the partition value plus width minus 1, up to the largest int.
         case INTEGER -> {
           int lower = (Integer) value;
           yield new SourceBounds(
               lower, (int) Math.min(Integer.MAX_VALUE, (long) lower + width - 1));
         }
-        // Long values use the same blocks as integer values.
+        // Truncation rounds a long down to the start of its block of width values. A value here
+        // is at least the partition value and below the next block start. So the upper bound is
+        // the partition value plus width minus 1, up to the largest long.
         case LONG -> {
           long lower = ((Number) value).longValue();
           yield new SourceBounds(
               lower, lower > Long.MAX_VALUE - (width - 1) ? Long.MAX_VALUE : lower + width - 1);
         }
-        // The same blocks apply to the unscaled value. The upper bound adds width minus 1 to the
-        // unscaled value and keeps the same scale.
+        // Truncation rounds the unscaled integer of a decimal down to its block start. The scale
+        // stays the same. So a value here is from the partition value up to width minus 1
+        // unscaled units above it, at the same scale.
         case DECIMAL -> {
           BigDecimal lower = (BigDecimal) value;
           BigInteger unscaledUpper = lower.unscaledValue().add(BigInteger.valueOf(width - 1));
           yield new SourceBounds(lower, new BigDecimal(unscaledUpper, lower.scale()));
         }
-        // The partition value is a prefix. Values with that prefix sort at or after it and below
-        // the next prefix value.
+        // The partition value is a prefix, and every value in the partition starts with it. So a
+        // value sorts at or after the prefix. It sorts before the first string that comes after
+        // all strings with that prefix.
         case STRING -> truncatedString(value.toString(), width);
-        // The partition value is a byte prefix. The bounds work the same way as for strings.
+        // The partition value is a byte prefix, and every value in the partition starts with it.
+        // So a value sorts at or after the prefix. It sorts before the first byte value that
+        // comes after all byte values with that prefix.
         case BINARY -> truncatedBinary((ByteBuffer) value, width);
         default ->
             throw new UnsupportedOperationException("Unsupported truncate source: " + sourceType);
       };
     }
 
-    // A value shorter than the width was not truncated, so the bounds are exact.
+    // A stored string shorter than the width was never truncated. It is the only possible value
+    // in its partition, so both bounds equal it.
     private static SourceBounds truncatedString(String prefix, int width) {
       if (prefix.codePointCount(0, prefix.length()) < width) {
         return new SourceBounds(prefix, prefix);
       }
 
-      // the extra character forces the prefix to be incremented
       return new SourceBounds(prefix, UnicodeUtil.truncateStringMax(prefix + "\u0000", width));
     }
 
-    // A value shorter than the width was not truncated, so the bounds are exact.
+    // A stored byte value shorter than the width was never truncated. It is the only possible
+    // value in its partition, so both bounds equal it.
     private static SourceBounds truncatedBinary(ByteBuffer prefix, int width) {
       if (prefix.remaining() < width) {
         return new SourceBounds(prefix, prefix);
       }
 
-      // The extra zero byte forces the prefix to be incremented.
       ByteBuffer extended = ByteBuffer.allocate(prefix.remaining() + 1);
       extended.put(prefix.duplicate()).put((byte) 0).flip();
       return new SourceBounds(prefix, BinaryUtil.truncateBinaryMax(extended, width));
@@ -469,16 +478,18 @@ class StatsUtil {
       return temporal(ChronoUnit.HOURS);
     }
 
-    // values in partition p are in [epoch + p units, epoch + (p + 1) units)
+    // The partition value counts whole periods since the epoch. Every value in the partition falls
+    // in that period. So it is at or after the period start and at most the last source unit
+    // before the next period starts.
     private SourceBounds temporal(ChronoUnit unit) {
       if (value == null) {
         return null;
       }
 
       long periods = (Integer) value;
-      // old writers stored p + 1 for values in a period p < 0
-      // TODO: Remove the wider lower bound for values before 1970 when support for writers
-      // before 0.11 is dropped.
+      // Old writers stored the period plus one for periods before 1970. So a stored value of 0 or
+      // less may come from the previous period, and the lower bound starts one period earlier.
+      // TODO: Remove the wider lower bound when support for writers before 0.11 is dropped.
       long lowerPeriods = periods <= 0 ? periods - 1 : periods;
       return switch (sourceType.typeId()) {
         case DATE -> {
