@@ -399,7 +399,7 @@ class StatsUtil {
       }
 
       return switch (sourceType.typeId()) {
-        // The spec writes the source value as the partition value plus a remainder from 0 to
+        // The spec defines the partition value as the source value minus a remainder from 0 to
         // width minus 1. We know that the lower bound must be the partition value, and the
         // upper bound must be the partition value plus width minus 1.
         case INTEGER -> {
@@ -407,7 +407,7 @@ class StatsUtil {
           yield new SourceBounds(
               lower, (int) Math.min(Integer.MAX_VALUE, (long) lower + width - 1));
         }
-        // The spec writes the source value as the partition value plus a remainder from 0 to
+        // The spec defines the partition value as the source value minus a remainder from 0 to
         // width minus 1. We know that the lower bound must be the partition value, and the
         // upper bound must be the partition value plus width minus 1.
         case LONG -> {
@@ -415,7 +415,7 @@ class StatsUtil {
           yield new SourceBounds(
               lower, lower > Long.MAX_VALUE - (width - 1) ? Long.MAX_VALUE : lower + width - 1);
         }
-        // The spec uses the same remainder rule for the unscaled value of a decimal.
+        // The spec defines the same remainder rule for the unscaled value of a decimal.
         // We know that the lower bound must be the partition value, and the upper bound must
         // be the partition value plus width minus 1 unscaled units, at the same scale.
         case DECIMAL -> {
@@ -423,11 +423,11 @@ class StatsUtil {
           BigInteger unscaledUpper = lower.unscaledValue().add(BigInteger.valueOf(width - 1));
           yield new SourceBounds(lower, new BigDecimal(unscaledUpper, lower.scale()));
         }
-        // The spec keeps the first width code points, so every value in this partition starts
+        // Truncate keeps the first width code points, so every value in this partition starts
         // with the partition value. We know that the lower bound must be that value itself, and
         // that an upper bound, when one exists, must be the first string above them all.
         case STRING -> truncatedString(value.toString(), width);
-        // The spec keeps the first width bytes, so every value in this partition starts with the
+        // Truncate keeps the first width bytes, so every value in this partition starts with the
         // partition value. We know that the lower bound must be that value itself, and that an
         // upper bound, when one exists, must be the first binary value above them all.
         case BINARY -> truncatedBinary((ByteBuffer) value, width);
@@ -438,7 +438,7 @@ class StatsUtil {
 
     private static SourceBounds truncatedString(String prefix, int width) {
       if (prefix.codePointCount(0, prefix.length()) < width) {
-        // The spec's substring returns the whole value when it is shorter than the width, so a
+        // Substring returns the whole value when it is shorter than the width, so a
         // shorter stored value was never cut. It is the only possible value in its partition,
         // so both bounds equal it.
         return new SourceBounds(prefix, prefix);
@@ -449,7 +449,7 @@ class StatsUtil {
 
     private static SourceBounds truncatedBinary(ByteBuffer prefix, int width) {
       if (prefix.remaining() < width) {
-        // The spec's subarray returns the whole value when it is shorter than the width, so a
+        // Subarray returns the whole value when it is shorter than the width, so a
         // shorter stored value was never cut. It is the only possible value in its partition,
         // so both bounds equal it.
         return new SourceBounds(prefix, prefix);
