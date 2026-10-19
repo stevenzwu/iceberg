@@ -467,6 +467,8 @@ class StatsUtil {
 
       long periods = (Integer) value;
       // old writers stored p + 1 for values in a period p < 0
+      // TODO: Remove the wider lower bound for values before 1970 when support for writers
+      // before 0.11 is dropped.
       long lowerPeriods = periods <= 0 ? periods - 1 : periods;
       return switch (sourceType.typeId()) {
         case DATE -> {
