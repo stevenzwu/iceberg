@@ -480,17 +480,17 @@ class StatsUtil {
       return temporal(ChronoUnit.HOURS);
     }
 
-    // The partition value counts whole periods since the epoch. Every value in the partition falls
-    // in that period. So it is at or after the period start and at most the last source unit
-    // before the next period starts.
+    // The partition value counts years, months, days, or hours from 1970. Every value in this
+    // partition falls in the span that starts that many units after 1970, so the lower bound must
+    // be the span start and the upper bound must be the last source unit before the next span.
     private SourceBounds temporal(ChronoUnit unit) {
       if (value == null) {
         return null;
       }
 
       long periods = (Integer) value;
-      // Old writers stored the period plus one for periods before 1970. So a stored value of 0 or
-      // less may come from the previous period, and the lower bound starts one period earlier.
+      // Old writers stored the count plus one for values before 1970. So a stored count of 0 or
+      // less may come from the span one unit earlier, and the lower bound starts one unit earlier.
       // TODO: Remove the wider lower bound when support for writers before 0.11 is dropped.
       long lowerPeriods = periods <= 0 ? periods - 1 : periods;
       return switch (sourceType.typeId()) {

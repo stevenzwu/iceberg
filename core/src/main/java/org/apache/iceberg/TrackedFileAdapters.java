@@ -629,13 +629,15 @@ class TrackedFileAdapters {
       Map<Integer, ByteBuffer> lowerBounds = copyOf(dataFile.lowerBounds());
       Map<Integer, ByteBuffer> upperBounds = copyOf(dataFile.upperBounds());
 
-      // Every row in this file shares the same partition tuple, so we know that the source values
-      // must lie in both the partition-derived range and the range recorded for the file. We know
-      // that the merged range must be the intersection of those ranges: the larger lower bound and
-      // the smaller upper bound, with a missing bound leaving the other bound in place. If the
-      // ranges do not overlap, the partition-derived range wins. The counts are exact too: a
-      // non-null partition value means no value is null, and a null one means all values are null,
-      // so the value count and the null count follow directly from the record count.
+      // A data file can have stats for a source column, recorded when it was written. These stats say
+      // the values lie in a recorded range. Every row shares the partition tuple, so each value must
+      // lie in the range the partition value and its transform allow. Both must hold, so we tighten
+      // the recorded bounds to the higher of the two lower bounds and the lower of the two upper
+      // bounds. A missing bound leaves the other as it is. The tightened bounds are the strongest
+      // true statement about values, and stronger bounds prune more files at read time. One range
+      // alone loses information and can say values may lie where the other range shows they cannot.
+      // If they do not overlap, the partition range wins. A non-null partition value means valueCount
+      // equals recordCount and nullCount equals 0. A null one means all values are null.
       for (Map.Entry<Integer, StatsUtil.SourceBounds> entry : boundsBySourceId.entrySet()) {
         int sourceId = entry.getKey();
         valueCounts.put(sourceId, recordCount);
