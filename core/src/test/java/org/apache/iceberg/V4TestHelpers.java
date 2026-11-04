@@ -19,9 +19,14 @@
 package org.apache.iceberg;
 
 import java.io.IOException;
+import java.util.List;
+import org.apache.iceberg.geospatial.GeospatialBound;
+import org.apache.iceberg.io.CloseableIterable;
 import org.apache.iceberg.io.FileAppender;
 import org.apache.iceberg.io.FileIO;
+import org.apache.iceberg.io.InputFile;
 import org.apache.iceberg.io.OutputFile;
+import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.types.Types;
 
 /** Factories for building V4 {@link TrackedFile}s and manifests in tests. */
@@ -59,7 +64,7 @@ class V4TestHelpers {
     return dataFile(ADDED_TRACKING, location, null, null, null, dv);
   }
 
-  private static TrackedFile dataFile(
+  static TrackedFile dataFile(
       Tracking tracking,
       String location,
       Integer specId,
@@ -79,6 +84,19 @@ class V4TestHelpers {
 
   static TrackedFile manifestRef(FileContent content, String location, ManifestInfo manifestInfo) {
     return manifestRefWithStats(content, location, null, manifestInfo);
+  }
+
+  static TrackedFile manifestRef(
+      Tracking tracking, FileContent content, String location, ManifestInfo manifestInfo) {
+    return trackedFile(
+        tracking,
+        content,
+        location,
+        null, // specId
+        null, // partition
+        null, // stats
+        null, // dv
+        manifestInfo);
   }
 
   static TrackedFile manifestRefWithStats(
@@ -170,5 +188,43 @@ class V4TestHelpers {
     }
 
     return out;
+  }
+
+  static List<TrackedFile> readTrackedFiles(
+      InputFile in, FileFormat format, Types.StructType partitionType, Types.StructType statsType)
+      throws IOException {
+    InternalData.ReadBuilder readBuilder =
+        InternalData.read(format, in)
+            .project(TrackedFile.readSchema(partitionType, statsType))
+            .setRootType(TrackedFileStruct.class)
+            .setCustomType(TrackedFile.TRACKING.fieldId(), TrackingStruct.class)
+            .setCustomType(TrackedFile.DELETION_VECTOR.fieldId(), DeletionVectorStruct.class)
+            .setCustomType(TrackedFile.MANIFEST_INFO.fieldId(), ManifestInfoStruct.class);
+    if (!partitionType.fields().isEmpty()) {
+      readBuilder.setCustomType(TrackedFile.PARTITION_ID, PartitionData.class);
+    }
+
+    if (!statsType.fields().isEmpty()) {
+      readBuilder.setCustomType(TrackedFile.CONTENT_STATS_ID, ContentStatsStruct.class);
+      for (Types.NestedField fieldStats : statsType.fields()) {
+        readBuilder.setCustomType(fieldStats.fieldId(), FieldStatsStruct.class);
+        Types.StructType fieldStatsType = fieldStats.type().asStructType();
+        Types.NestedField lowerBound = fieldStatsType.field(StatsUtil.LOWER_BOUND_NAME);
+        Types.NestedField upperBound = fieldStatsType.field(StatsUtil.UPPER_BOUND_NAME);
+        if (lowerBound != null && lowerBound.type().isStructType()) {
+          readBuilder.setCustomType(lowerBound.fieldId(), GeospatialBound.class);
+          readBuilder.setCustomType(upperBound.fieldId(), GeospatialBound.class);
+        }
+      }
+    }
+
+    List<TrackedFile> files = Lists.newArrayList();
+    try (CloseableIterable<TrackedFile> reader = readBuilder.build()) {
+      for (TrackedFile file : reader) {
+        files.add(file.copy());
+      }
+    }
+
+    return files;
   }
 }
