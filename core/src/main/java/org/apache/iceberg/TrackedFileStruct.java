@@ -222,7 +222,9 @@ class TrackedFileStruct extends SupportsIndexProjection implements TrackedFile, 
   @Override
   public StructLike partition() {
     if (partition == null) {
-      ValidationException.check(specId == null, "Missing partition for spec %s", specId);
+      // manifests may have a spec ID when all of their entries share a spec, but no partition
+      ValidationException.check(
+          specId == null || isManifest(), "Missing partition for spec %s", specId);
       return null;
     }
 
@@ -277,6 +279,10 @@ class TrackedFileStruct extends SupportsIndexProjection implements TrackedFile, 
   @Override
   protected <T> T internalGet(int pos, Class<T> javaClass) {
     return javaClass.cast(getByPos(pos));
+  }
+
+  private boolean isManifest() {
+    return contentType == FileContent.DATA_MANIFEST || contentType == FileContent.DELETE_MANIFEST;
   }
 
   private Object getByPos(int pos) {
