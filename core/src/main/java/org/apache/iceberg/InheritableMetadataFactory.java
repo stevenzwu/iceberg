@@ -38,6 +38,7 @@ class InheritableMetadataFactory {
         manifest.partitionSpecId(),
         manifest.snapshotId(),
         manifest.sequenceNumber(),
+        manifest.snapshotTimestampMicros(),
         manifest.path());
   }
 
@@ -50,13 +51,19 @@ class InheritableMetadataFactory {
     private final int specId;
     private final long snapshotId;
     private final long sequenceNumber;
+    private final Long snapshotTimestampMicros;
     private final String manifestLocation;
 
     private BaseInheritableMetadata(
-        int specId, long snapshotId, long sequenceNumber, String manifestLocation) {
+        int specId,
+        long snapshotId,
+        long sequenceNumber,
+        Long snapshotTimestampMicros,
+        String manifestLocation) {
       this.specId = specId;
       this.snapshotId = snapshotId;
       this.sequenceNumber = sequenceNumber;
+      this.snapshotTimestampMicros = snapshotTimestampMicros;
       this.manifestLocation = manifestLocation;
     }
 
@@ -80,11 +87,14 @@ class InheritableMetadataFactory {
         manifestEntry.setFileSequenceNumber(sequenceNumber);
       }
 
+      manifestEntry.setSnapshotTimestampMicros(snapshotTimestampMicros);
+
       if (manifestEntry.file() instanceof BaseFile) {
         BaseFile<?> file = (BaseFile<?>) manifestEntry.file();
         file.setSpecId(specId);
         file.setDataSequenceNumber(manifestEntry.dataSequenceNumber());
         file.setFileSequenceNumber(manifestEntry.fileSequenceNumber());
+        file.setSnapshotTimestampMicros(manifestEntry.snapshotTimestampMicros());
         file.setManifestLocation(manifestLocation);
       }
 

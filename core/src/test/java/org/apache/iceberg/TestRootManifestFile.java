@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Test;
 class TestRootManifestFile {
   private static final long SNAPSHOT_ID = 42L;
   private static final long SEQUENCE_NUMBER = 7L;
+  private static final long SNAPSHOT_TIMESTAMP_MICROS = 1_700_000_000_123_000L;
   private static final long FIRST_ROW_ID = 1000L;
   private static final long LENGTH = 1024L;
   private static final String LOCATION = "s3://bucket/db/table/metadata/root.parquet";
@@ -36,12 +37,19 @@ class TestRootManifestFile {
     ByteBuffer keyMetadata = ByteBuffer.wrap(new byte[] {9, 8, 7});
     RootManifestFile root =
         new RootManifestFile(
-            LOCATION, LENGTH, SNAPSHOT_ID, SEQUENCE_NUMBER, FIRST_ROW_ID, keyMetadata);
+            LOCATION,
+            LENGTH,
+            SNAPSHOT_ID,
+            SEQUENCE_NUMBER,
+            SNAPSHOT_TIMESTAMP_MICROS,
+            FIRST_ROW_ID,
+            keyMetadata);
 
     assertThat(root.path()).isEqualTo(LOCATION);
     assertThat(root.length()).isEqualTo(LENGTH);
     assertThat(root.snapshotId()).isEqualTo(SNAPSHOT_ID);
     assertThat(root.sequenceNumber()).isEqualTo(SEQUENCE_NUMBER);
+    assertThat(root.snapshotTimestampMicros()).isEqualTo(SNAPSHOT_TIMESTAMP_MICROS);
     assertThat(root.firstRowId()).isEqualTo(FIRST_ROW_ID);
     assertThat(root.keyMetadata()).isEqualTo(keyMetadata);
   }
@@ -49,7 +57,14 @@ class TestRootManifestFile {
   @Test
   void defaultedFields() {
     RootManifestFile root =
-        new RootManifestFile(LOCATION, LENGTH, SNAPSHOT_ID, SEQUENCE_NUMBER, FIRST_ROW_ID, null);
+        new RootManifestFile(
+            LOCATION,
+            LENGTH,
+            SNAPSHOT_ID,
+            SEQUENCE_NUMBER,
+            SNAPSHOT_TIMESTAMP_MICROS,
+            FIRST_ROW_ID,
+            null);
 
     assertThat(root.content()).isEqualTo(ManifestContent.DATA);
     assertThat(root.formatVersion()).isEqualTo(4);
@@ -60,13 +75,20 @@ class TestRootManifestFile {
     ByteBuffer keyMetadata = ByteBuffer.wrap(new byte[] {9, 8, 7});
     RootManifestFile original =
         new RootManifestFile(
-            LOCATION, LENGTH, SNAPSHOT_ID, SEQUENCE_NUMBER, FIRST_ROW_ID, keyMetadata);
+            LOCATION,
+            LENGTH,
+            SNAPSHOT_ID,
+            SEQUENCE_NUMBER,
+            SNAPSHOT_TIMESTAMP_MICROS,
+            FIRST_ROW_ID,
+            keyMetadata);
     ManifestFile copy = original.copy();
 
     assertThat(copy.path()).isEqualTo(LOCATION);
     assertThat(copy.length()).isEqualTo(LENGTH);
     assertThat(copy.snapshotId()).isEqualTo(SNAPSHOT_ID);
     assertThat(copy.sequenceNumber()).isEqualTo(SEQUENCE_NUMBER);
+    assertThat(copy.snapshotTimestampMicros()).isEqualTo(SNAPSHOT_TIMESTAMP_MICROS);
     assertThat(copy.firstRowId()).isEqualTo(FIRST_ROW_ID);
     assertThat(copy.keyMetadata()).isEqualTo(keyMetadata);
     assertThat(copy.keyMetadata().array())
@@ -82,6 +104,7 @@ class TestRootManifestFile {
             LENGTH,
             SNAPSHOT_ID,
             SEQUENCE_NUMBER,
+            SNAPSHOT_TIMESTAMP_MICROS,
             FIRST_ROW_ID,
             ByteBuffer.wrap(new byte[] {9, 8, 7}));
 
@@ -90,6 +113,7 @@ class TestRootManifestFile {
         .contains("length=" + LENGTH)
         .contains("snapshot_id=" + SNAPSHOT_ID)
         .contains("sequence_number=" + SEQUENCE_NUMBER)
+        .contains("snapshot_timestamp_micros=" + SNAPSHOT_TIMESTAMP_MICROS)
         .contains("first_row_id=" + FIRST_ROW_ID)
         .contains("key_metadata=(redacted)");
   }
@@ -97,7 +121,14 @@ class TestRootManifestFile {
   @Test
   void unsupportedAccessorsThrow() {
     RootManifestFile root =
-        new RootManifestFile(LOCATION, LENGTH, SNAPSHOT_ID, SEQUENCE_NUMBER, FIRST_ROW_ID, null);
+        new RootManifestFile(
+            LOCATION,
+            LENGTH,
+            SNAPSHOT_ID,
+            SEQUENCE_NUMBER,
+            SNAPSHOT_TIMESTAMP_MICROS,
+            FIRST_ROW_ID,
+            null);
 
     assertThatThrownBy(root::partitionSpecId)
         .isInstanceOf(UnsupportedOperationException.class)

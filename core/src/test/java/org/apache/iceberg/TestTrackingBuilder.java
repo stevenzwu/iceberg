@@ -33,11 +33,11 @@ class TestTrackingBuilder {
 
   // Tests aren't expected to change these fields
   private static final Tracking SOURCE_TRACKING_ADDED =
-      new TrackingStruct(EntryStatus.ADDED, 42L, 10L, 10L, 43L, 1000L, null, null);
+      new TrackingStruct(EntryStatus.ADDED, 42L, 10L, 10L, 43L, 1000L, null, null, null);
   private static final Tracking SOURCE_TRACKING_EXISTING =
-      new TrackingStruct(EntryStatus.EXISTING, 42L, 10L, 10L, 43L, 1000L, null, null);
+      new TrackingStruct(EntryStatus.EXISTING, 42L, 10L, 10L, 43L, 1000L, null, null, null);
   private static final Tracking SOURCE_TRACKING_MODIFIED =
-      new TrackingStruct(EntryStatus.MODIFIED, 42L, 10L, 10L, 43L, 1000L, null, null);
+      new TrackingStruct(EntryStatus.MODIFIED, 42L, 10L, 10L, 43L, 1000L, null, null, null);
 
   @Test
   void addedWithSameCommitDvStaysAdded() {
@@ -64,6 +64,29 @@ class TestTrackingBuilder {
     assertThat(existing.fileSequenceNumber()).isEqualTo(SOURCE_TRACKING_ADDED.fileSequenceNumber());
     assertThat(existing.modifiedSnapshotId()).isEqualTo(SOURCE_TRACKING_ADDED.modifiedSnapshotId());
     assertThat(existing.firstRowId()).isEqualTo(SOURCE_TRACKING_ADDED.firstRowId());
+  }
+
+  @Test
+  void existingBuilderPreservesSnapshotTimestamp() {
+    Tracking source =
+        new TrackingStruct(
+            EntryStatus.ADDED, 42L, 10L, 10L, 43L, 1000L, null, null, 1_700_000_000_000_000L);
+
+    Tracking existing = TrackingBuilder.from(source, 1L).build();
+
+    assertThat(existing.snapshotTimestampMicros()).isEqualTo(1_700_000_000_000_000L);
+  }
+
+  @Test
+  void columnFilesUpdatedClearsSnapshotTimestamp() {
+    Tracking source =
+        new TrackingStruct(
+            EntryStatus.EXISTING, 42L, 10L, 10L, 43L, 1000L, null, null, 1_700_000_000_000_000L);
+
+    Tracking modified = TrackingBuilder.from(source, 999L).columnFilesUpdated().build();
+
+    assertThat(modified.status()).isEqualTo(EntryStatus.MODIFIED);
+    assertThat(modified.snapshotTimestampMicros()).isNull();
   }
 
   @Test
@@ -94,7 +117,15 @@ class TestTrackingBuilder {
   void sourceDvPositionsAreNotCarriedForward() {
     Tracking source =
         new TrackingStruct(
-            EntryStatus.ADDED, 42L, 10L, 10L, 43L, 1000L, new byte[] {1, 2}, new byte[] {3, 4});
+            EntryStatus.ADDED,
+            42L,
+            10L,
+            10L,
+            43L,
+            1000L,
+            new byte[] {1, 2},
+            new byte[] {3, 4},
+            null);
 
     Tracking existing = TrackingBuilder.from(source, 1L).build();
     assertThat(existing.deletedPositions()).isNull();
@@ -192,7 +223,7 @@ class TestTrackingBuilder {
         .hasMessage("Invalid tracking source: data sequence number is null");
 
     TrackingStruct missingFileSeq =
-        new TrackingStruct(EntryStatus.ADDED, 42L, 10L, null, null, null, null, null);
+        new TrackingStruct(EntryStatus.ADDED, 42L, 10L, null, null, null, null, null, null);
 
     assertThatThrownBy(() -> TrackingBuilder.from(missingFileSeq, 1L))
         .isInstanceOf(IllegalArgumentException.class)
@@ -224,7 +255,7 @@ class TestTrackingBuilder {
   @MethodSource("terminalTransitionCases")
   void rejectsTransitionsFromTerminalStatus(
       EntryStatus sourceStatus, Consumer<Tracking> factoryCall) {
-    Tracking source = new TrackingStruct(sourceStatus, 42L, 10L, 10L, 43L, 1000L, null, null);
+    Tracking source = new TrackingStruct(sourceStatus, 42L, 10L, 10L, 43L, 1000L, null, null, null);
 
     assertThatThrownBy(() -> factoryCall.accept(source))
         .isInstanceOf(IllegalStateException.class)

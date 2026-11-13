@@ -420,6 +420,16 @@ class V4Metadata {
     }
 
     @Override
+    public Long snapshotTimestampMicros() {
+      return wrapped.snapshotTimestampMicros();
+    }
+
+    @Override
+    public void setSnapshotTimestampMicros(Long snapshotTimestampMicros) {
+      wrapped.setSnapshotTimestampMicros(snapshotTimestampMicros);
+    }
+
+    @Override
     public F file() {
       return wrapped.file();
     }
@@ -898,6 +908,7 @@ class V4Metadata {
         case 5 -> firstRowId();
         case 6 -> wrapped.deletedPositions();
         case 7 -> wrapped.replacedPositions();
+        case 8 -> wrapped.snapshotTimestampMicros();
         default -> throw new UnsupportedOperationException("Unknown field ordinal: " + pos);
       };
     }

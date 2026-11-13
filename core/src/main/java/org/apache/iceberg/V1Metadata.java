@@ -318,6 +318,16 @@ class V1Metadata {
     }
 
     @Override
+    public Long snapshotTimestampMicros() {
+      return wrapped.snapshotTimestampMicros();
+    }
+
+    @Override
+    public void setSnapshotTimestampMicros(Long snapshotTimestampMicros) {
+      wrapped.setSnapshotTimestampMicros(snapshotTimestampMicros);
+    }
+
+    @Override
     public DataFile file() {
       return wrapped.file();
     }
@@ -497,6 +507,11 @@ class V1Metadata {
     @Override
     public Long fileSequenceNumber() {
       return wrapped.fileSequenceNumber();
+    }
+
+    @Override
+    public Long snapshotTimestampMicros() {
+      return wrapped.snapshotTimestampMicros();
     }
 
     @Override

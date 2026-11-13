@@ -31,6 +31,7 @@ class GenericManifestEntry<F extends ContentFile<F>>
   private Long snapshotId = null;
   private Long dataSequenceNumber = null;
   private Long fileSequenceNumber = null;
+  private Long snapshotTimestampMicros = null;
   private F file = null;
 
   GenericManifestEntry(org.apache.avro.Schema schema) {
@@ -48,6 +49,7 @@ class GenericManifestEntry<F extends ContentFile<F>>
     this.snapshotId = toCopy.snapshotId;
     this.dataSequenceNumber = toCopy.dataSequenceNumber;
     this.fileSequenceNumber = toCopy.fileSequenceNumber;
+    this.snapshotTimestampMicros = toCopy.snapshotTimestampMicros;
     this.file = toCopy.file().copy(fullCopy);
   }
 
@@ -62,6 +64,7 @@ class GenericManifestEntry<F extends ContentFile<F>>
     this.snapshotId = newSnapshotId;
     this.dataSequenceNumber = newDataSequenceNumber;
     this.fileSequenceNumber = newFileSequenceNumber;
+    this.snapshotTimestampMicros = null;
     this.file = newFile;
     return this;
   }
@@ -75,6 +78,7 @@ class GenericManifestEntry<F extends ContentFile<F>>
     this.snapshotId = newSnapshotId;
     this.dataSequenceNumber = newDataSequenceNumber;
     this.fileSequenceNumber = null;
+    this.snapshotTimestampMicros = null;
     this.file = Delegates.suppressFirstRowId(newFile);
     return this;
   }
@@ -90,6 +94,7 @@ class GenericManifestEntry<F extends ContentFile<F>>
     this.snapshotId = newSnapshotId;
     this.dataSequenceNumber = newDataSequenceNumber;
     this.fileSequenceNumber = newFileSequenceNumber;
+    this.snapshotTimestampMicros = null;
     this.file = newFile;
     return this;
   }
@@ -118,6 +123,11 @@ class GenericManifestEntry<F extends ContentFile<F>>
   @Override
   public Long fileSequenceNumber() {
     return fileSequenceNumber;
+  }
+
+  @Override
+  public Long snapshotTimestampMicros() {
+    return snapshotTimestampMicros;
   }
 
   /**
@@ -151,6 +161,11 @@ class GenericManifestEntry<F extends ContentFile<F>>
   @Override
   public void setFileSequenceNumber(long newFileSequenceNumber) {
     this.fileSequenceNumber = newFileSequenceNumber;
+  }
+
+  @Override
+  public void setSnapshotTimestampMicros(Long newSnapshotTimestampMicros) {
+    this.snapshotTimestampMicros = newSnapshotTimestampMicros;
   }
 
   @Override
@@ -222,6 +237,7 @@ class GenericManifestEntry<F extends ContentFile<F>>
         .add("snapshot_id", snapshotId)
         .add("data_sequence_number", dataSequenceNumber)
         .add("file_sequence_number", fileSequenceNumber)
+        .add("snapshot_timestamp_micros", snapshotTimestampMicros)
         .add("file", file)
         .toString();
   }

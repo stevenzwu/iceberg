@@ -41,7 +41,15 @@ class TestTrackingStruct {
   void fieldAccess() {
     TrackingStruct tracking =
         new TrackingStruct(
-            EntryStatus.ADDED, 42L, 10L, 11L, 43L, 1000L, DELETED_POSITIONS, REPLACED_POSITIONS);
+            EntryStatus.ADDED,
+            42L,
+            10L,
+            11L,
+            43L,
+            1000L,
+            DELETED_POSITIONS,
+            REPLACED_POSITIONS,
+            null);
     tracking.set(MANIFEST_LOCATION_ORDINAL, "manifest-location");
     tracking.set(MANIFEST_POSITION_ORDINAL, 7L);
 
@@ -88,7 +96,15 @@ class TestTrackingStruct {
   void getByPosition() {
     TrackingStruct tracking =
         new TrackingStruct(
-            EntryStatus.ADDED, 42L, 10L, 11L, 43L, 1000L, DELETED_POSITIONS, REPLACED_POSITIONS);
+            EntryStatus.ADDED,
+            42L,
+            10L,
+            11L,
+            43L,
+            1000L,
+            DELETED_POSITIONS,
+            REPLACED_POSITIONS,
+            null);
     tracking.set(MANIFEST_LOCATION_ORDINAL, "manifest-location");
     tracking.set(MANIFEST_POSITION_ORDINAL, 7L);
 
@@ -111,7 +127,15 @@ class TestTrackingStruct {
   void copy() {
     TrackingStruct tracking =
         new TrackingStruct(
-            EntryStatus.MODIFIED, 42L, 10L, 11L, 43L, 1000L, DELETED_POSITIONS, REPLACED_POSITIONS);
+            EntryStatus.MODIFIED,
+            42L,
+            10L,
+            11L,
+            43L,
+            1000L,
+            DELETED_POSITIONS,
+            REPLACED_POSITIONS,
+            null);
     tracking.set(MANIFEST_LOCATION_ORDINAL, "manifest-location");
     tracking.set(MANIFEST_POSITION_ORDINAL, 7L);
 
@@ -136,7 +160,8 @@ class TestTrackingStruct {
   @ParameterizedTest
   @EnumSource(EntryStatus.class)
   void inheritSnapshotIdOnly(EntryStatus status) {
-    TrackingStruct tracking = new TrackingStruct(status, null, null, null, null, null, null, null);
+    TrackingStruct tracking =
+        new TrackingStruct(status, null, null, null, null, null, null, null, null);
 
     tracking.inherit(100L);
 
@@ -147,7 +172,8 @@ class TestTrackingStruct {
   @ParameterizedTest
   @EnumSource(EntryStatus.class)
   void inheritSnapshotId(EntryStatus status) {
-    TrackingStruct tracking = new TrackingStruct(status, null, null, null, null, null, null, null);
+    TrackingStruct tracking =
+        new TrackingStruct(status, null, null, null, null, null, null, null, null);
 
     tracking.inherit(100L, 60L);
 
@@ -157,7 +183,8 @@ class TestTrackingStruct {
   @ParameterizedTest
   @EnumSource(EntryStatus.class)
   void inheritancePreservesExplicitValues(EntryStatus status) {
-    TrackingStruct tracking = new TrackingStruct(status, 200L, 75L, 76L, null, null, null, null);
+    TrackingStruct tracking =
+        new TrackingStruct(status, 200L, 75L, 76L, null, null, null, null, null);
 
     tracking.inherit(100L, 60L);
 
@@ -170,7 +197,8 @@ class TestTrackingStruct {
   @EnumSource(EntryStatus.class)
   void inheritanceAllStatusesInheritSeq0(EntryStatus status) {
     // Sequence number 0 is inherited for all statuses for reading pre-seq v1 tables
-    TrackingStruct tracking = new TrackingStruct(status, 42L, null, null, null, null, null, null);
+    TrackingStruct tracking =
+        new TrackingStruct(status, 42L, null, null, null, null, null, null, null);
 
     tracking.inherit(100L, 0L);
 
@@ -181,7 +209,7 @@ class TestTrackingStruct {
   @Test
   void inheritanceAddedEntriesInheritSequenceNumber() {
     TrackingStruct tracking =
-        new TrackingStruct(EntryStatus.ADDED, 42L, null, null, null, null, null, null);
+        new TrackingStruct(EntryStatus.ADDED, 42L, null, null, null, null, null, null, null);
 
     tracking.inherit(100L, 60L);
 
@@ -192,7 +220,7 @@ class TestTrackingStruct {
   @Test
   void inheritanceModifiedEntriesInheritDataSequenceNumber() {
     TrackingStruct tracking =
-        new TrackingStruct(EntryStatus.MODIFIED, 42L, null, null, null, null, null, null);
+        new TrackingStruct(EntryStatus.MODIFIED, 42L, null, null, null, null, null, null, null);
 
     tracking.inherit(100L, 60L);
 
@@ -206,7 +234,8 @@ class TestTrackingStruct {
   @ParameterizedTest
   @FieldSource("NON_INHERITING_STATUSES")
   void inheritanceWithNonInheritingStatus(EntryStatus status) {
-    TrackingStruct tracking = new TrackingStruct(status, 42L, null, null, null, null, null, null);
+    TrackingStruct tracking =
+        new TrackingStruct(status, 42L, null, null, null, null, null, null, null);
 
     tracking.inherit(100L, 60L);
 
@@ -222,7 +251,8 @@ class TestTrackingStruct {
   @ParameterizedTest
   @FieldSource("ASSIGNING_STATUSES")
   void assignmentFirstRowIdAssigned(EntryStatus status) {
-    TrackingStruct tracking = new TrackingStruct(status, 42L, null, null, null, null, null, null);
+    TrackingStruct tracking =
+        new TrackingStruct(status, 42L, null, null, null, null, null, null, null);
 
     assertThat(tracking.assignFirstRowId(10_000L)).as("Should return true when assigned").isTrue();
 
@@ -232,7 +262,8 @@ class TestTrackingStruct {
   @ParameterizedTest
   @FieldSource("NON_ASSIGNING_STATUSES")
   void assignmentFirstRowIdNotAssigned(EntryStatus status) {
-    TrackingStruct tracking = new TrackingStruct(status, 42L, null, null, null, null, null, null);
+    TrackingStruct tracking =
+        new TrackingStruct(status, 42L, null, null, null, null, null, null, null);
 
     assertThat(tracking.assignFirstRowId(10_000L))
         .as("Should return false when not assigned")
@@ -244,7 +275,8 @@ class TestTrackingStruct {
   @ParameterizedTest
   @EnumSource(EntryStatus.class)
   void assignmentFirstRowIdAlreadyAssigned(EntryStatus status) {
-    TrackingStruct tracking = new TrackingStruct(status, 42L, null, null, null, 5_000L, null, null);
+    TrackingStruct tracking =
+        new TrackingStruct(status, 42L, null, null, null, 5_000L, null, null, null);
 
     assertThat(tracking.assignFirstRowId(10_000L))
         .as("Should return false when not assigned")
@@ -259,7 +291,7 @@ class TestTrackingStruct {
   @EnumSource(EntryStatus.class)
   void assignmentNullFirstRowId(EntryStatus status) {
     TrackingStruct tracking =
-        new TrackingStruct(status, 42L, null, null, null, 10_000L, null, null);
+        new TrackingStruct(status, 42L, null, null, null, 10_000L, null, null, null);
 
     assertThat(tracking.assignFirstRowId(null))
         .as("Should return false when not assigned")
@@ -271,7 +303,8 @@ class TestTrackingStruct {
   @ParameterizedTest
   @EnumSource(EntryStatus.class)
   void isLiveDelegatesToStatus(EntryStatus status) {
-    TrackingStruct tracking = new TrackingStruct(status, null, null, null, null, null, null, null);
+    TrackingStruct tracking =
+        new TrackingStruct(status, null, null, null, null, null, null, null, null);
 
     assertThat(tracking.isLive()).isEqualTo(status.isLive());
   }
@@ -280,7 +313,15 @@ class TestTrackingStruct {
   void internalSetIgnoresUnknownOrdinal() {
     TrackingStruct tracking =
         new TrackingStruct(
-            EntryStatus.ADDED, 42L, 10L, 11L, 43L, 1000L, DELETED_POSITIONS, REPLACED_POSITIONS);
+            EntryStatus.ADDED,
+            42L,
+            10L,
+            11L,
+            43L,
+            1000L,
+            DELETED_POSITIONS,
+            REPLACED_POSITIONS,
+            null);
 
     // unknown ordinals from a newer format version are silently ignored
     tracking.internalSet(99, "value from a newer format");
@@ -321,7 +362,15 @@ class TestTrackingStruct {
       throws IOException, ClassNotFoundException {
     TrackingStruct tracking =
         new TrackingStruct(
-            EntryStatus.MODIFIED, 42L, 10L, 11L, 43L, 1000L, DELETED_POSITIONS, REPLACED_POSITIONS);
+            EntryStatus.MODIFIED,
+            42L,
+            10L,
+            11L,
+            43L,
+            1000L,
+            DELETED_POSITIONS,
+            REPLACED_POSITIONS,
+            null);
     tracking.set(MANIFEST_LOCATION_ORDINAL, "manifest-location");
     tracking.set(MANIFEST_POSITION_ORDINAL, 7L);
 

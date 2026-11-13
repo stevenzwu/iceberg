@@ -51,6 +51,7 @@ class TestTrackedFileAdapters {
   private static final long DATA_SEQUENCE_NUMBER = 10L;
   private static final long FILE_SEQUENCE_NUMBER = 11L;
   private static final long FIRST_ROW_ID = 1000L;
+  private static final long SNAPSHOT_TIMESTAMP_MICROS = 1_700_000_000_000_000L;
   private static final int SORT_ORDER_ID = 3;
 
   private static final long MANIFEST_SEQUENCE_NUMBER = 5L;
@@ -122,7 +123,8 @@ class TestTrackedFileAdapters {
           null, // modifiedSnapshotId
           FIRST_ROW_ID,
           null, // deletedPositions
-          null); // replacedPositions
+          null,
+          SNAPSHOT_TIMESTAMP_MICROS);
 
   private static final ByteBuffer MANIFEST_KEY_METADATA = ByteBuffer.wrap(new byte[] {7, 8, 9});
 
@@ -194,7 +196,8 @@ class TestTrackedFileAdapters {
             null,
             FIRST_ROW_ID,
             null,
-            null);
+            null,
+            SNAPSHOT_TIMESTAMP_MICROS);
     tracking.set(MANIFEST_LOCATION_ORDINAL, MANIFEST_LOCATION);
     tracking.set(MANIFEST_POSITION_ORDINAL, MANIFEST_POS);
 
@@ -231,6 +234,7 @@ class TestTrackedFileAdapters {
     assertThat(dataFile.sortOrderId()).isEqualTo(3);
     assertThat(dataFile.dataSequenceNumber()).isEqualTo(DATA_SEQUENCE_NUMBER);
     assertThat(dataFile.fileSequenceNumber()).isEqualTo(FILE_SEQUENCE_NUMBER);
+    assertThat(dataFile.snapshotTimestampMicros()).isEqualTo(SNAPSHOT_TIMESTAMP_MICROS);
     assertThat(dataFile.firstRowId()).isEqualTo(FIRST_ROW_ID);
     assertThat(dataFile.keyMetadata()).isEqualTo(ByteBuffer.wrap(new byte[] {1, 2, 3}));
     assertThat(dataFile.splitOffsets()).containsExactly(50L, 100L);
@@ -285,7 +289,8 @@ class TestTrackedFileAdapters {
             42L,
             FIRST_ROW_ID,
             null,
-            null);
+            null,
+            SNAPSHOT_TIMESTAMP_MICROS);
     tracking.set(MANIFEST_LOCATION_ORDINAL, MANIFEST_LOCATION);
     tracking.set(MANIFEST_POSITION_ORDINAL, MANIFEST_POS);
 
@@ -329,6 +334,7 @@ class TestTrackedFileAdapters {
     assertThat(dvFile.partition()).isSameAs(PARTITION);
     assertThat(dvFile.dataSequenceNumber()).isEqualTo(DATA_SEQUENCE_NUMBER);
     assertThat(dvFile.fileSequenceNumber()).isEqualTo(FILE_SEQUENCE_NUMBER);
+    assertThat(dvFile.snapshotTimestampMicros()).isEqualTo(SNAPSHOT_TIMESTAMP_MICROS);
     assertThat(dvFile.manifestLocation()).isEqualTo(MANIFEST_LOCATION);
 
     // fields that are null for DVs
@@ -375,6 +381,7 @@ class TestTrackedFileAdapters {
     assertThat(actual.sortOrderId()).isEqualTo(expected.sortOrderId());
     assertThat(actual.dataSequenceNumber()).isEqualTo(expected.dataSequenceNumber());
     assertThat(actual.fileSequenceNumber()).isEqualTo(expected.fileSequenceNumber());
+    assertThat(actual.snapshotTimestampMicros()).isEqualTo(expected.snapshotTimestampMicros());
     assertThat(actual.firstRowId()).isEqualTo(expected.firstRowId());
     assertThat(actual.pos()).isEqualTo(expected.pos());
     assertThat(actual.manifestLocation()).isEqualTo(expected.manifestLocation());
@@ -409,6 +416,7 @@ class TestTrackedFileAdapters {
             FILE_SEQUENCE_NUMBER,
             42L,
             FIRST_ROW_ID,
+            null,
             null,
             null);
     tracking.set(MANIFEST_LOCATION_ORDINAL, MANIFEST_LOCATION);
@@ -506,6 +514,7 @@ class TestTrackedFileAdapters {
     assertThat(manifest.modifiedFilesCount()).isEqualTo(MANIFEST_INFO.modifiedFilesCount());
     assertThat(manifest.modifiedRowsCount()).isEqualTo(MANIFEST_INFO.modifiedRowsCount());
     assertThat(manifest.firstRowId()).isEqualTo(FIRST_ROW_ID);
+    assertThat(manifest.snapshotTimestampMicros()).isEqualTo(SNAPSHOT_TIMESTAMP_MICROS);
     assertThat(manifest.keyMetadata()).isEqualTo(MANIFEST_KEY_METADATA);
     assertThat(manifest.manifestDeletionVector().buffer())
         .isEqualTo(ByteBuffer.wrap(MumblingTestUtil.onlyFirstBitSetBytes()));
@@ -662,18 +671,19 @@ class TestTrackedFileAdapters {
 
   @Test
   void dataTrackedFileAdapterFromExistingManifestEntry() {
-    TrackedFile result =
-        TrackedFileAdapters.forDataFile(TABLE_SCHEMA)
-            .wrap(
-                new GenericManifestEntry<DataFile>(
-                        ManifestEntry.getSchema(UNPARTITIONED_SPEC.partitionType()).asStruct())
-                    .wrapExisting(
-                        SNAPSHOT_ID, DATA_SEQUENCE_NUMBER, FILE_SEQUENCE_NUMBER, DATA_FILE));
+    ManifestEntry<DataFile> entry =
+        new GenericManifestEntry<DataFile>(
+                ManifestEntry.getSchema(UNPARTITIONED_SPEC.partitionType()).asStruct())
+            .wrapExisting(SNAPSHOT_ID, DATA_SEQUENCE_NUMBER, FILE_SEQUENCE_NUMBER, DATA_FILE);
+    entry.setSnapshotTimestampMicros(SNAPSHOT_TIMESTAMP_MICROS);
+
+    TrackedFile result = TrackedFileAdapters.forDataFile(TABLE_SCHEMA).wrap(entry);
 
     assertThat(result.tracking().status()).isEqualTo(EntryStatus.EXISTING);
     assertThat(result.tracking().snapshotId()).isEqualTo(SNAPSHOT_ID);
     assertThat(result.tracking().dataSequenceNumber()).isEqualTo(DATA_SEQUENCE_NUMBER);
     assertThat(result.tracking().fileSequenceNumber()).isEqualTo(FILE_SEQUENCE_NUMBER);
+    assertThat(result.tracking().snapshotTimestampMicros()).isEqualTo(SNAPSHOT_TIMESTAMP_MICROS);
     assertThat(result.tracking().firstRowId()).isEqualTo(FIRST_ROW_ID);
     assertManifestPosition(result.tracking(), DATA_FILE);
     assertWrappedDataFileMatchesFileFields(result, DATA_FILE);

@@ -131,6 +131,16 @@ interface ManifestEntry<F extends ContentFile<F>> {
    */
   void setFileSequenceNumber(long fileSequenceNumber);
 
+  /** Returns the microsecond timestamp of the snapshot that added or changed the file. */
+  Long snapshotTimestampMicros();
+
+  /**
+   * Sets the snapshot timestamp for this manifest entry.
+   *
+   * @param snapshotTimestampMicros a snapshot timestamp in microseconds
+   */
+  void setSnapshotTimestampMicros(Long snapshotTimestampMicros);
+
   /** Returns a file. */
   F file();
 

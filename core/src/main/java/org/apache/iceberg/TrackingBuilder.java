@@ -32,6 +32,7 @@ class TrackingBuilder {
   private Long modifiedSnapshotId;
   private byte[] deletedPositions;
   private byte[] replacedPositions;
+  private Long snapshotTimestampMicros;
 
   /**
    * Creates a builder for a newly added file.
@@ -86,6 +87,7 @@ class TrackingBuilder {
     this.modifiedSnapshotId = null;
     this.deletedPositions = null;
     this.replacedPositions = null;
+    this.snapshotTimestampMicros = null;
   }
 
   private TrackingBuilder(Tracking source, long newSnapshotId) {
@@ -100,6 +102,7 @@ class TrackingBuilder {
     this.modifiedSnapshotId = source.modifiedSnapshotId();
     this.deletedPositions = null;
     this.replacedPositions = null;
+    this.snapshotTimestampMicros = source.snapshotTimestampMicros();
   }
 
   /** Indicates that the DV has been updated for the new Tracking. */
@@ -125,6 +128,7 @@ class TrackingBuilder {
     // dataSequenceNumber as writers are required to rewrite v2 equality and position deletes to DVs
     // when applying column update.
     this.dataSequenceNumber = null;
+    this.snapshotTimestampMicros = null;
     return this;
   }
 
@@ -157,7 +161,8 @@ class TrackingBuilder {
         modifiedSnapshotId,
         firstRowId,
         deletedPositions,
-        replacedPositions);
+        replacedPositions,
+        snapshotTimestampMicros);
   }
 
   private static Tracking terminal(EntryStatus to, Tracking source, long newSnapshotId) {
@@ -171,7 +176,8 @@ class TrackingBuilder {
         source.modifiedSnapshotId(),
         source.firstRowId(),
         null,
-        null);
+        null,
+        source.snapshotTimestampMicros());
   }
 
   private static void validateSource(Tracking source) {
