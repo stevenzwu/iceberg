@@ -85,6 +85,7 @@ class TestV4ManifestReader {
 
   private static final long MANIFEST_SEQ = 309L;
   private static final long SNAPSHOT_TS = 1_700_000_000_123_456L;
+  private static final long MANIFEST_SNAPSHOT_TIMESTAMP_MICROS = 1_800_000_000_123_456L;
   private static final DeletionVector DV = deletionVector("s3://bucket/dv.puffin");
 
   private static final ManifestInfo MANIFEST_INFO =
@@ -355,7 +356,7 @@ class TestV4ManifestReader {
                     10_000L, // firstRowId
                     null, // deletedPositions
                     null, // replacedPositions
-                    null), // snapshotTimestampMicros
+                    MANIFEST_SNAPSHOT_TIMESTAMP_MICROS),
                 "s3://bucket/added.parquet"),
             dataFile(
                 new TrackingStruct(
@@ -430,7 +431,7 @@ class TestV4ManifestReader {
                     10_000L, // firstRowId
                     null, // deletedPositions
                     null, // replacedPositions
-                    null), // snapshotTimestampMicros
+                    MANIFEST_SNAPSHOT_TIMESTAMP_MICROS),
                 "s3://bucket/added.parquet"),
             // status changed to DELETED, delete snapshot ID is unknown
             dataFile(
@@ -636,7 +637,15 @@ class TestV4ManifestReader {
             // inherits sequence numbers
             dataFile(
                 new TrackingStruct(
-                    EntryStatus.ADDED, SNAPSHOT_ID, 5L, 5L, null, 5_000L, null, null, null),
+                    EntryStatus.ADDED,
+                    SNAPSHOT_ID,
+                    5L,
+                    5L,
+                    null,
+                    5_000L,
+                    null,
+                    null,
+                    MANIFEST_SNAPSHOT_TIMESTAMP_MICROS),
                 "s3://bucket/table/file-a.parquet"),
             // does not inherit sequence numbers
             dataFile(
@@ -684,13 +693,37 @@ class TestV4ManifestReader {
         List.of(
             dataFileWithColumnFiles(
                 new TrackingStruct(
-                    EntryStatus.MODIFIED, SNAPSHOT_ID, 5L, 3L, 34L, 5_000L, null, null, null),
+                    EntryStatus.MODIFIED,
+                    SNAPSHOT_ID,
+                    5L,
+                    3L,
+                    34L,
+                    5_000L,
+                    null,
+                    null,
+                    MANIFEST_SNAPSHOT_TIMESTAMP_MICROS),
                 "s3://bucket/table/file-a.parquet",
                 COLUMN_FILES));
 
     assertThat(actual)
         .usingComparatorForType(FILE_AND_TRACKING_COMPARATOR, TrackedFile.class)
         .isEqualTo(expected);
+  }
+
+  @ParameterizedTest
+  @FieldSource("MANIFEST_FORMATS")
+  public void committedManifestWithoutSnapshotTimestampRejected(FileFormat format)
+      throws IOException {
+    ManifestFile manifest = writeManifest(format, UNPARTITIONED_TYPE, UNPARTITIONED_FILE);
+    when(manifest.snapshotTimestampMicros()).thenReturn(null);
+
+    V4ManifestReader.Builder builder =
+        V4ManifestReader.builder(manifest, IO, TABLE_SCHEMA, UNPARTITIONED_SPECS)
+            .metricsConfig(METRICS_CONFIG);
+
+    assertThatThrownBy(() -> read(builder))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("Invalid snapshot timestamp for committed manifest %s: null", manifest.path());
   }
 
   @ParameterizedTest
@@ -777,15 +810,39 @@ class TestV4ManifestReader {
         List.of(
             dataFile(
                 new TrackingStruct(
-                    EntryStatus.ADDED, SNAPSHOT_ID, 5L, 5L, null, 10_000L, null, null, null),
+                    EntryStatus.ADDED,
+                    SNAPSHOT_ID,
+                    5L,
+                    5L,
+                    null,
+                    10_000L,
+                    null,
+                    null,
+                    MANIFEST_SNAPSHOT_TIMESTAMP_MICROS),
                 "s3://bucket/table/file-a.parquet"),
             dataFile(
                 new TrackingStruct(
-                    EntryStatus.ADDED, SNAPSHOT_ID, 5L, 5L, null, 10_100L, null, null, null),
+                    EntryStatus.ADDED,
+                    SNAPSHOT_ID,
+                    5L,
+                    5L,
+                    null,
+                    10_100L,
+                    null,
+                    null,
+                    MANIFEST_SNAPSHOT_TIMESTAMP_MICROS),
                 "s3://bucket/table/file-b.parquet"),
             dataFile(
                 new TrackingStruct(
-                    EntryStatus.ADDED, SNAPSHOT_ID, 5L, 5L, null, 10_200L, null, null, null),
+                    EntryStatus.ADDED,
+                    SNAPSHOT_ID,
+                    5L,
+                    5L,
+                    null,
+                    10_200L,
+                    null,
+                    null,
+                    MANIFEST_SNAPSHOT_TIMESTAMP_MICROS),
                 "s3://bucket/table/file-c.parquet"),
             dataFile(
                 new TrackingStruct(
@@ -801,7 +858,15 @@ class TestV4ManifestReader {
                 "s3://bucket/table/file-d.parquet"),
             dataFile(
                 new TrackingStruct(
-                    EntryStatus.ADDED, SNAPSHOT_ID, 5L, 5L, null, 10_300L, null, null, null),
+                    EntryStatus.ADDED,
+                    SNAPSHOT_ID,
+                    5L,
+                    5L,
+                    null,
+                    10_300L,
+                    null,
+                    null,
+                    MANIFEST_SNAPSHOT_TIMESTAMP_MICROS),
                 "s3://bucket/table/file-e.parquet"));
 
     assertThat(actual)
@@ -2239,6 +2304,7 @@ class TestV4ManifestReader {
     when(manifest.content()).thenReturn(ManifestContent.DATA);
     when(manifest.snapshotId()).thenReturn(SNAPSHOT_ID);
     when(manifest.sequenceNumber()).thenReturn(MANIFEST_SEQ);
+    when(manifest.snapshotTimestampMicros()).thenReturn(MANIFEST_SNAPSHOT_TIMESTAMP_MICROS);
     return manifest;
   }
 

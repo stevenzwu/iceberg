@@ -420,6 +420,16 @@ class V4Metadata {
     }
 
     @Override
+    public Long snapshotTimestampMicros() {
+      return wrapped.snapshotTimestampMicros();
+    }
+
+    @Override
+    public void setSnapshotTimestampMicros(Long snapshotTimestampMicros) {
+      wrapped.setSnapshotTimestampMicros(snapshotTimestampMicros);
+    }
+
+    @Override
     public F file() {
       return wrapped.file();
     }
@@ -821,11 +831,14 @@ class V4Metadata {
     RootTrackedFileWrapper(
         long commitSnapshotId,
         long commitSequenceNumber,
+        long commitSnapshotTimestampMicros,
         Map<Integer, PartitionSpec> specsById,
         Types.StructType partitionType,
         Types.StructType contentStatsType) {
       super(specsById, partitionType, contentStatsType);
-      this.trackingWrapper = new RootTrackingWrapper(commitSnapshotId, commitSequenceNumber);
+      this.trackingWrapper =
+          new RootTrackingWrapper(
+              commitSnapshotId, commitSequenceNumber, commitSnapshotTimestampMicros);
       this.manifestInfoWrapper = new ManifestInfoWrapper(commitSequenceNumber);
     }
 
@@ -1039,8 +1052,12 @@ class V4Metadata {
   }
 
   private static class RootTrackingWrapper extends TrackingWrapper {
-    private RootTrackingWrapper(long commitSnapshotId, long commitSequenceNumber) {
+    private final long commitSnapshotTimestampMicros;
+
+    private RootTrackingWrapper(
+        long commitSnapshotId, long commitSequenceNumber, long commitSnapshotTimestampMicros) {
       super(commitSnapshotId, commitSequenceNumber);
+      this.commitSnapshotTimestampMicros = commitSnapshotTimestampMicros;
     }
 
     private TrackingWrapper wrap(Tracking tracking, Long firstRowId, String location) {
@@ -1061,9 +1078,20 @@ class V4Metadata {
         case 5 -> firstRowId();
         case 6 -> wrapped().deletedPositions();
         case 7 -> wrapped().replacedPositions();
-        case 8 -> wrapped().snapshotTimestampMicros();
+        case 8 -> snapshotTimestampMicros();
         default -> throw new UnsupportedOperationException("Unknown field ordinal: " + pos);
       };
+    }
+
+    private Long snapshotTimestampMicros() {
+      Long snapshotTimestampMicros = wrapped().snapshotTimestampMicros();
+      EntryStatus status = wrapped().status();
+      if (snapshotTimestampMicros == null
+          && (status == EntryStatus.ADDED || status == EntryStatus.MODIFIED)) {
+        return commitSnapshotTimestampMicros;
+      }
+
+      return snapshotTimestampMicros;
     }
   }
 

@@ -46,6 +46,7 @@ abstract class V4ManifestWriter implements Closeable {
       int tableSchemaId,
       long snapshotId,
       long sequenceNumber,
+      long snapshotTimestampMicros,
       long firstRowId) {
     Types.StructType partitionType = Partitioning.unionPartitionTypes(specsById.values());
     return new V4ManifestWriter.RootWriter(
@@ -57,6 +58,7 @@ abstract class V4ManifestWriter implements Closeable {
         tableSchemaId,
         snapshotId,
         sequenceNumber,
+        snapshotTimestampMicros,
         firstRowId);
   }
 
@@ -365,6 +367,7 @@ abstract class V4ManifestWriter implements Closeable {
         int tableSchemaId,
         long snapshotId,
         long sequenceNumber,
+        long snapshotTimestampMicros,
         long firstRowId) {
       super(
           output,
@@ -378,6 +381,8 @@ abstract class V4ManifestWriter implements Closeable {
               String.valueOf(snapshotId),
               "sequence-number",
               String.valueOf(sequenceNumber),
+              "snapshot-timestamp-micros",
+              String.valueOf(snapshotTimestampMicros),
               "first-row-id",
               String.valueOf(firstRowId)),
           writerProperties,
@@ -385,7 +390,12 @@ abstract class V4ManifestWriter implements Closeable {
 
       this.wrapper =
           new V4Metadata.RootTrackedFileWrapper(
-              snapshotId, sequenceNumber, specsById, partitionType, contentStatsType);
+              snapshotId,
+              sequenceNumber,
+              snapshotTimestampMicros,
+              specsById,
+              partitionType,
+              contentStatsType);
       this.firstRowId = firstRowId;
       this.nextRowId = firstRowId;
     }

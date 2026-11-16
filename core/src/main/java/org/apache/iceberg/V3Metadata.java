@@ -406,6 +406,16 @@ class V3Metadata {
     }
 
     @Override
+    public Long snapshotTimestampMicros() {
+      return wrapped.snapshotTimestampMicros();
+    }
+
+    @Override
+    public void setSnapshotTimestampMicros(Long snapshotTimestampMicros) {
+      wrapped.setSnapshotTimestampMicros(snapshotTimestampMicros);
+    }
+
+    @Override
     public F file() {
       return wrapped.file();
     }

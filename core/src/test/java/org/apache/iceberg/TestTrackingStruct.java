@@ -182,7 +182,7 @@ class TestTrackingStruct {
     TrackingStruct tracking =
         new TrackingStruct(status, null, null, null, null, null, null, null, null);
 
-    tracking.inherit(100L, 60L);
+    tracking.inherit(100L, 60L, 1_700_000_000_123_456L);
 
     assertThat(tracking.snapshotId()).isEqualTo(100L);
   }
@@ -191,13 +191,14 @@ class TestTrackingStruct {
   @EnumSource(EntryStatus.class)
   void inheritancePreservesExplicitValues(EntryStatus status) {
     TrackingStruct tracking =
-        new TrackingStruct(status, 200L, 75L, 76L, null, null, null, null, null);
+        new TrackingStruct(status, 200L, 75L, 76L, null, null, null, null, 1_600_000_000_123_456L);
 
-    tracking.inherit(100L, 60L);
+    tracking.inherit(100L, 60L, 1_700_000_000_123_456L);
 
     assertThat(tracking.snapshotId()).isEqualTo(200L);
     assertThat(tracking.dataSequenceNumber()).isEqualTo(75L);
     assertThat(tracking.fileSequenceNumber()).isEqualTo(76L);
+    assertThat(tracking.snapshotTimestampMicros()).isEqualTo(1_600_000_000_123_456L);
   }
 
   @ParameterizedTest
@@ -207,32 +208,35 @@ class TestTrackingStruct {
     TrackingStruct tracking =
         new TrackingStruct(status, 42L, null, null, null, null, null, null, null);
 
-    tracking.inherit(100L, 0L);
+    tracking.inherit(100L, 0L, 1_700_000_000_123_456L);
 
     assertThat(tracking.dataSequenceNumber()).isEqualTo(0L);
     assertThat(tracking.fileSequenceNumber()).isEqualTo(0L);
+    assertThat(tracking.snapshotTimestampMicros()).isEqualTo(1_700_000_000_123_456L);
   }
 
   @Test
-  void inheritanceAddedEntriesInheritSequenceNumber() {
+  void inheritanceAddedEntriesInheritSequenceNumberAndTimestamp() {
     TrackingStruct tracking =
         new TrackingStruct(EntryStatus.ADDED, 42L, null, null, null, null, null, null, null);
 
-    tracking.inherit(100L, 60L);
+    tracking.inherit(100L, 60L, 1_700_000_000_123_456L);
 
     assertThat(tracking.dataSequenceNumber()).isEqualTo(60L);
     assertThat(tracking.fileSequenceNumber()).isEqualTo(60L);
+    assertThat(tracking.snapshotTimestampMicros()).isEqualTo(1_700_000_000_123_456L);
   }
 
   @Test
-  void inheritanceModifiedEntriesInheritDataSequenceNumber() {
+  void inheritanceModifiedEntriesInheritDataSequenceNumberAndTimestamp() {
     TrackingStruct tracking =
         new TrackingStruct(EntryStatus.MODIFIED, 42L, null, null, null, null, null, null, null);
 
-    tracking.inherit(100L, 60L);
+    tracking.inherit(100L, 60L, 1_700_000_000_123_456L);
 
     assertThat(tracking.dataSequenceNumber()).isEqualTo(60L);
     assertThat(tracking.fileSequenceNumber()).isNull();
+    assertThat(tracking.snapshotTimestampMicros()).isEqualTo(1_700_000_000_123_456L);
   }
 
   private static final List<EntryStatus> NON_INHERITING_STATUSES =
@@ -244,10 +248,11 @@ class TestTrackingStruct {
     TrackingStruct tracking =
         new TrackingStruct(status, 42L, null, null, null, null, null, null, null);
 
-    tracking.inherit(100L, 60L);
+    tracking.inherit(100L, 60L, 1_700_000_000_123_456L);
 
     assertThat(tracking.dataSequenceNumber()).isNull();
     assertThat(tracking.fileSequenceNumber()).isNull();
+    assertThat(tracking.snapshotTimestampMicros()).isNull();
   }
 
   private static final List<EntryStatus> ASSIGNING_STATUSES =

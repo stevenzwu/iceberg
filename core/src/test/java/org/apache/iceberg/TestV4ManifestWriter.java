@@ -257,6 +257,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
     try (writer) {
       writer.append(FILE_A);
@@ -282,7 +283,7 @@ class TestV4ManifestWriter {
                   COMMIT_FIRST_ROW_ID,
                   null, // no change bitmaps
                   null,
-                  null)); // snapshot timestamp
+                  COMMIT_SNAPSHOT_TS));
     }
   }
 
@@ -298,6 +299,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
     try (writer) {
       writer.appendAtSeq(FILE_A, 33L);
@@ -323,7 +325,7 @@ class TestV4ManifestWriter {
                   COMMIT_FIRST_ROW_ID,
                   null, // no change bitmaps
                   null,
-                  null)); // snapshot timestamp
+                  COMMIT_SNAPSHOT_TS));
     }
   }
 
@@ -339,6 +341,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
     try (writer) {
       writer.append(FILE_A_WITH_DV);
@@ -364,7 +367,7 @@ class TestV4ManifestWriter {
                   COMMIT_FIRST_ROW_ID,
                   null, // no change bitmaps
                   null,
-                  null)); // snapshot timestamp
+                  COMMIT_SNAPSHOT_TS));
     }
   }
 
@@ -380,6 +383,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
     try (writer) {
       writer.modify(FILE_A, DV_A);
@@ -422,6 +426,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
     try (writer) {
       writer.existing(FILE_A);
@@ -464,6 +469,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
     try (writer) {
       writer.delete(FILE_A_WITH_DV);
@@ -506,6 +512,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
     try (writer) {
       writer.replace(FILE_A_WITH_DV);
@@ -548,6 +555,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
     try (writer) {
       writer.existing(FILE_A);
@@ -579,7 +587,7 @@ class TestV4ManifestWriter {
                 COMMIT_FIRST_ROW_ID,
                 null, // no change bitmaps
                 null,
-                null)); // snapshot timestamp
+                COMMIT_SNAPSHOT_TS));
   }
 
   @Test
@@ -593,6 +601,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
 
     try (root) {
@@ -614,6 +623,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
     try (writer) {
       writer.append(FILE_A);
@@ -641,7 +651,7 @@ class TestV4ManifestWriter {
                   COMMIT_FIRST_ROW_ID,
                   null, // no change bitmaps
                   null,
-                  null)); // snapshot timestamp
+                  COMMIT_SNAPSHOT_TS));
       assertThat(files.get(1).tracking())
           .usingComparator(V4TestComparators.TRACKING)
           .isEqualTo(
@@ -654,7 +664,7 @@ class TestV4ManifestWriter {
                   COMMIT_FIRST_ROW_ID + FILE_A.recordCount(),
                   null, // no change bitmaps
                   null,
-                  null)); // snapshot timestamp
+                  COMMIT_SNAPSHOT_TS));
     }
   }
 
@@ -670,6 +680,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
     try (writer) {
       writer.append(LEAF_MANIFEST);
@@ -698,7 +709,7 @@ class TestV4ManifestWriter {
                   COMMIT_FIRST_ROW_ID,
                   null, // no change bitmaps
                   null,
-                  null)); // snapshot timestamp
+                  COMMIT_SNAPSHOT_TS));
     }
   }
 
@@ -714,6 +725,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
     try (writer) {
       writer.append(LEAF_MANIFEST_WITH_MDV);
@@ -742,7 +754,7 @@ class TestV4ManifestWriter {
                   COMMIT_FIRST_ROW_ID,
                   null, // no change bitmaps
                   null,
-                  null)); // snapshot timestamp
+                  COMMIT_SNAPSHOT_TS));
     }
   }
 
@@ -758,6 +770,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
     try (writer) {
       writer.existing(LEAF_MANIFEST_WITH_MDV);
@@ -800,6 +813,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
     try (writer) {
       writer.delete(LEAF_MANIFEST);
@@ -842,6 +856,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
     try (writer) {
       writer.replace(LEAF_MANIFEST_WITH_MDV);
@@ -884,6 +899,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
     try (writer) {
       writer.existing(DELETE_MANIFEST);
@@ -926,6 +942,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
     try (writer) {
       writer.delete(DELETE_MANIFEST);
@@ -967,6 +984,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
 
     try (root) {
@@ -987,6 +1005,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
 
     try (writer) {
@@ -1007,6 +1026,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
 
     try (writer) {
@@ -1027,6 +1047,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
 
     try (writer) {
@@ -1047,6 +1068,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
 
     try (writer) {
@@ -1067,6 +1089,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
 
     try (writer) {
@@ -1088,6 +1111,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
     try (writer) {
       writer.existing(FILE_A);
@@ -1126,7 +1150,7 @@ class TestV4ManifestWriter {
                   COMMIT_FIRST_ROW_ID,
                   null, // no change bitmaps
                   null,
-                  null)); // snapshot timestamp
+                  COMMIT_SNAPSHOT_TS));
       assertThat(files.get(3).tracking())
           .usingComparator(V4TestComparators.TRACKING)
           .as("Tracking should preserve LEAF_MANIFEST_WITH_DV metadata")
@@ -1146,6 +1170,7 @@ class TestV4ManifestWriter {
             SCHEMA.schemaId(),
             COMMIT_SNAPSHOT_ID,
             COMMIT_SEQUENCE_NUMBER,
+            COMMIT_SNAPSHOT_TS,
             COMMIT_FIRST_ROW_ID);
     try (writer) {
       writer.append(FILE_A);
@@ -1181,7 +1206,7 @@ class TestV4ManifestWriter {
                   COMMIT_FIRST_ROW_ID,
                   null, // no change bitmaps
                   null,
-                  null)); // snapshot timestamp
+                  COMMIT_SNAPSHOT_TS));
       assertThat(files.get(1).tracking())
           .usingComparator(V4TestComparators.TRACKING)
           .isEqualTo(
@@ -1194,7 +1219,7 @@ class TestV4ManifestWriter {
                   COMMIT_FIRST_ROW_ID + FILE_A.recordCount(),
                   null, // no change bitmaps
                   null,
-                  null)); // snapshot timestamp
+                  COMMIT_SNAPSHOT_TS));
       assertThat(files.get(2).tracking())
           .usingComparator(V4TestComparators.TRACKING)
           .isEqualTo(
@@ -1207,7 +1232,7 @@ class TestV4ManifestWriter {
                   COMMIT_FIRST_ROW_ID + FILE_A.recordCount() + leafRowsAssigned,
                   null, // no change bitmaps
                   null,
-                  null)); // snapshot timestamp
+                  COMMIT_SNAPSHOT_TS));
     }
   }
 
@@ -1246,7 +1271,7 @@ class TestV4ManifestWriter {
                 COMMIT_FIRST_ROW_ID,
                 null, // no change bitmaps
                 null,
-                null)); // snapshot timestamp
+                COMMIT_SNAPSHOT_TS));
 
     file = rawReadOne(in);
     assertThat(file)
@@ -1265,7 +1290,7 @@ class TestV4ManifestWriter {
                 null, // inherit first row ID
                 null, // no change bitmaps
                 null,
-                null)); // snapshot timestamp
+                null)); // inherit snapshot timestamp
   }
 
   @Test
@@ -1303,7 +1328,7 @@ class TestV4ManifestWriter {
                 COMMIT_FIRST_ROW_ID,
                 null, // no change bitmaps
                 null,
-                null)); // snapshot timestamp
+                COMMIT_SNAPSHOT_TS));
 
     file = rawReadOne(in);
     assertThat(file)
@@ -1322,7 +1347,7 @@ class TestV4ManifestWriter {
                 null, // inherit first row ID
                 null, // no change bitmaps
                 null,
-                null)); // snapshot timestamp
+                null)); // inherit snapshot timestamp
   }
 
   @Test
@@ -1360,7 +1385,7 @@ class TestV4ManifestWriter {
                 COMMIT_FIRST_ROW_ID,
                 null, // no change bitmaps
                 null,
-                null)); // snapshot timestamp
+                COMMIT_SNAPSHOT_TS));
 
     file = rawReadOne(in);
     assertThat(file)
@@ -1379,7 +1404,7 @@ class TestV4ManifestWriter {
                 null, // inherit first row ID
                 null, // no change bitmaps
                 null,
-                null)); // snapshot timestamp
+                null)); // inherit snapshot timestamp
   }
 
   @Test
@@ -1417,7 +1442,7 @@ class TestV4ManifestWriter {
                 COMMIT_FIRST_ROW_ID,
                 null, // no change bitmaps
                 null,
-                null)); // snapshot timestamp
+                COMMIT_SNAPSHOT_TS));
 
     file = rawReadOne(in);
     assertThat(file)
@@ -1436,7 +1461,7 @@ class TestV4ManifestWriter {
                 null, // inherit first row ID
                 null, // no change bitmaps
                 null,
-                null)); // snapshot timestamp
+                null)); // inherit snapshot timestamp
   }
 
   @Test
@@ -1640,7 +1665,7 @@ class TestV4ManifestWriter {
                 COMMIT_FIRST_ROW_ID,
                 null, // no change bitmaps
                 null,
-                null)); // snapshot timestamp
+                COMMIT_SNAPSHOT_TS));
   }
 
   @Test
