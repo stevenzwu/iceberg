@@ -22,6 +22,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assumptions.assumeThat;
 
+import java.io.IOException;
+import java.util.List;
 import org.apache.iceberg.expressions.Expressions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableSet;
 import org.apache.iceberg.relocated.com.google.common.collect.Iterables;
@@ -144,6 +146,25 @@ public class TestSnapshot extends TestBase {
     assertThatThrownBy(() -> snapshot.allManifests(table.io()))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("root manifests are not supported");
+  }
+
+  @TestTemplate
+  void manifestListEntriesHaveNullSnapshotTimestamp() throws IOException {
+    table.newFastAppend().appendFile(FILE_A).commit();
+    table.newFastAppend().appendFile(FILE_B).commit();
+
+    List<ManifestFile> manifests = table.currentSnapshot().allManifests(table.io());
+    assertThat(manifests).hasSize(2);
+
+    for (ManifestFile manifest : manifests) {
+      assertThat(manifest.snapshotTimestampMicros()).isNull();
+      try (ManifestReader<DataFile> reader =
+          ManifestFiles.read(manifest, table.io(), table.specs())) {
+        for (DataFile file : reader) {
+          assertThat(file.lastUpdatedTimestampMicros()).isNull();
+        }
+      }
+    }
   }
 
   @TestTemplate

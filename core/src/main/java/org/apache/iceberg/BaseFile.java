@@ -62,6 +62,7 @@ abstract class BaseFile<F> extends SupportsIndexProjection
   private long fileSizeInBytes = -1L;
   private Long dataSequenceNumber = null;
   private Long fileSequenceNumber = null;
+  private Long lastUpdatedTimestampMicros = null;
 
   // optional fields
   private Map<Integer, Long> columnSizes = null;
@@ -248,6 +249,7 @@ abstract class BaseFile<F> extends SupportsIndexProjection
     this.sortOrderId = toCopy.sortOrderId;
     this.dataSequenceNumber = toCopy.dataSequenceNumber;
     this.fileSequenceNumber = toCopy.fileSequenceNumber;
+    this.lastUpdatedTimestampMicros = toCopy.lastUpdatedTimestampMicros;
     this.firstRowId = toCopy.firstRowId;
     this.referencedDataFile = referencedDataFile;
     this.contentOffset = toCopy.contentOffset;
@@ -288,6 +290,15 @@ abstract class BaseFile<F> extends SupportsIndexProjection
 
   public void setFileSequenceNumber(Long fileSequenceNumber) {
     this.fileSequenceNumber = fileSequenceNumber;
+  }
+
+  @Override
+  public Long lastUpdatedTimestampMicros() {
+    return lastUpdatedTimestampMicros;
+  }
+
+  public void setLastUpdatedTimestampMicros(Long lastUpdatedTimestampMicros) {
+    this.lastUpdatedTimestampMicros = lastUpdatedTimestampMicros;
   }
 
   @Override
@@ -664,6 +675,9 @@ abstract class BaseFile<F> extends SupportsIndexProjection
         .add("sort_order_id", sortOrderId)
         .add("data_sequence_number", dataSequenceNumber == null ? "null" : dataSequenceNumber)
         .add("file_sequence_number", fileSequenceNumber == null ? "null" : fileSequenceNumber)
+        .add(
+            "last_updated_timestamp_micros",
+            lastUpdatedTimestampMicros == null ? "null" : lastUpdatedTimestampMicros)
         .add("first_row_id", firstRowId == null ? "null" : firstRowId)
         .add("referenced_data_file", referencedDataFile == null ? "null" : referencedDataFile)
         .add("content_offset", contentOffset == null ? "null" : contentOffset)

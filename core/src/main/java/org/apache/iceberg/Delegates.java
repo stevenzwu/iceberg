@@ -385,6 +385,11 @@ class Delegates {
     }
 
     @Override
+    public Long lastUpdatedTimestampMicros() {
+      return wrapped.lastUpdatedTimestampMicros();
+    }
+
+    @Override
     public Long firstRowId() {
       return wrapped.firstRowId();
     }

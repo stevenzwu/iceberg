@@ -694,18 +694,19 @@ class TestTrackedFileAdapters {
 
   @Test
   void dataTrackedFileAdapterFromExistingManifestEntry() {
-    TrackedFile result =
-        TrackedFileAdapters.forDataFile(TABLE_SCHEMA)
-            .wrap(
-                new GenericManifestEntry<DataFile>(
-                        ManifestEntry.getSchema(UNPARTITIONED_SPEC.partitionType()).asStruct())
-                    .wrapExisting(
-                        SNAPSHOT_ID, DATA_SEQUENCE_NUMBER, FILE_SEQUENCE_NUMBER, DATA_FILE));
+    ManifestEntry<DataFile> entry =
+        new GenericManifestEntry<DataFile>(
+                ManifestEntry.getSchema(UNPARTITIONED_SPEC.partitionType()).asStruct())
+            .wrapExisting(SNAPSHOT_ID, DATA_SEQUENCE_NUMBER, FILE_SEQUENCE_NUMBER, DATA_FILE);
+    entry.setSnapshotTimestampMicros(SNAPSHOT_TIMESTAMP_MICROS);
+
+    TrackedFile result = TrackedFileAdapters.forDataFile(TABLE_SCHEMA).wrap(entry);
 
     assertThat(result.tracking().status()).isEqualTo(EntryStatus.EXISTING);
     assertThat(result.tracking().snapshotId()).isEqualTo(SNAPSHOT_ID);
     assertThat(result.tracking().dataSequenceNumber()).isEqualTo(DATA_SEQUENCE_NUMBER);
     assertThat(result.tracking().fileSequenceNumber()).isEqualTo(FILE_SEQUENCE_NUMBER);
+    assertThat(result.tracking().snapshotTimestampMicros()).isEqualTo(SNAPSHOT_TIMESTAMP_MICROS);
     assertThat(result.tracking().firstRowId()).isEqualTo(FIRST_ROW_ID);
     assertManifestPosition(result.tracking(), DATA_FILE);
     assertWrappedDataFileMatchesFileFields(result, DATA_FILE);
