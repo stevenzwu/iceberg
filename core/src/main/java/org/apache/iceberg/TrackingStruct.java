@@ -135,12 +135,14 @@ class TrackingStruct extends SupportsIndexProjection implements Tracking, Serial
   }
 
   /**
-   * Inherit a commit's snapshot ID and sequence number if either is unset.
+   * Inherit a commit's snapshot ID, sequence number, and snapshot timestamp if any is unset.
    *
    * @param manifestSnapshotId the manifest's snapshot ID
    * @param manifestSeqNumber the manifest's sequence number, determined by a successful commit
+   * @param manifestSnapshotTimestampMicros the timestamp in microseconds of the manifest's snapshot
    */
-  void inherit(long manifestSnapshotId, long manifestSeqNumber) {
+  void inherit(
+      long manifestSnapshotId, long manifestSeqNumber, long manifestSnapshotTimestampMicros) {
     if (null == snapshotId) {
       this.snapshotId = manifestSnapshotId;
     }
@@ -154,6 +156,10 @@ class TrackingStruct extends SupportsIndexProjection implements Tracking, Serial
 
     if (null == fileSequenceNumber && (isAdded || manifestSeqNumber == 0)) {
       this.fileSequenceNumber = manifestSeqNumber;
+    }
+
+    if (null == snapshotTimestampMicros && (isAdded || isModified)) {
+      this.snapshotTimestampMicros = manifestSnapshotTimestampMicros;
     }
   }
 

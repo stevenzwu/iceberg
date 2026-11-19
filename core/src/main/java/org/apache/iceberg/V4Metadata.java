@@ -305,11 +305,14 @@ class V4Metadata {
     RootTrackedFileWrapper(
         long commitSnapshotId,
         long commitSequenceNumber,
+        long commitSnapshotTimestampMicros,
         Map<Integer, PartitionSpec> specsById,
         Types.StructType partitionType,
         Types.StructType contentStatsType) {
       super(specsById, partitionType, contentStatsType);
-      this.trackingWrapper = new RootTrackingWrapper(commitSnapshotId, commitSequenceNumber);
+      this.trackingWrapper =
+          new RootTrackingWrapper(
+              commitSnapshotId, commitSequenceNumber, commitSnapshotTimestampMicros);
       this.manifestInfoWrapper = new ManifestInfoWrapper(commitSequenceNumber);
     }
 
@@ -461,6 +464,16 @@ class V4Metadata {
       }
     }
 
+    protected void validateSnapshotTimestamp(Tracking tracking) {
+      EntryStatus status = tracking.status();
+      if (status != EntryStatus.ADDED && status != EntryStatus.MODIFIED) {
+        Preconditions.checkArgument(
+            tracking.snapshotTimestampMicros() != null,
+            "Invalid snapshot timestamp (null) for %s file",
+            status);
+      }
+    }
+
     protected TrackingWrapper wrapInternal(Tracking tracking, Long firstRowId) {
       this.wrapped = tracking;
       this.assignedFirstRowId = firstRowId;
@@ -504,6 +517,7 @@ class V4Metadata {
 
     private TrackingWrapper wrap(Tracking tracking) {
       validateSequenceNumbers(tracking);
+      validateSnapshotTimestamp(tracking);
       return wrapInternal(tracking, null /* first row ID is inherited */);
     }
 
@@ -523,14 +537,19 @@ class V4Metadata {
   }
 
   private static class RootTrackingWrapper extends TrackingWrapper {
-    private RootTrackingWrapper(long commitSnapshotId, long commitSequenceNumber) {
+    private final long commitSnapshotTimestampMicros;
+
+    private RootTrackingWrapper(
+        long commitSnapshotId, long commitSequenceNumber, long commitSnapshotTimestampMicros) {
       super(commitSnapshotId, commitSequenceNumber);
+      this.commitSnapshotTimestampMicros = commitSnapshotTimestampMicros;
     }
 
     private TrackingWrapper wrap(Tracking tracking, Long firstRowId, String location) {
       Preconditions.checkArgument(
           tracking.snapshotId() != null, "Missing snapshot ID for file: %s", location);
       validateSequenceNumbers(tracking);
+      validateSnapshotTimestamp(tracking);
       return wrapInternal(tracking, firstRowId);
     }
 
@@ -545,9 +564,15 @@ class V4Metadata {
         case 5 -> firstRowId();
         case 6 -> wrapped().deletedPositions();
         case 7 -> wrapped().replacedPositions();
-        case 8 -> wrapped().snapshotTimestampMicros();
+        case 8 -> snapshotTimestampMicros(wrapped().snapshotTimestampMicros());
         default -> throw new UnsupportedOperationException("Unknown field ordinal: " + pos);
       };
+    }
+
+    private Long snapshotTimestampMicros(Long snapshotTimestampMicros) {
+      return snapshotTimestampMicros != null
+          ? snapshotTimestampMicros
+          : commitSnapshotTimestampMicros;
     }
   }
 
