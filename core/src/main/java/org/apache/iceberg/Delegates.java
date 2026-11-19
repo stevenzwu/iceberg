@@ -390,6 +390,11 @@ class Delegates {
     }
 
     @Override
+    public Long snapshotTimestampMicros() {
+      return wrapped.snapshotTimestampMicros();
+    }
+
+    @Override
     public Long firstRowId() {
       return wrapped.firstRowId();
     }
