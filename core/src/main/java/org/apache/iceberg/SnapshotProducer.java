@@ -317,10 +317,11 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
    * @param metadataToUpdate the base table metadata to apply changes to
    * @param parent snapshot to apply the changes to; will be the new snapshot's parent
    * @param sequenceNumber the sequence number of this commit if it succeeds
+   * @param timestampMillis the timestamp of this commit if it succeeds
    * @return metadata for the new snapshot, including root manifest location
    */
   protected NewSnapshotMetadata writeRootManifest(
-      TableMetadata metadataToUpdate, Snapshot parent, long sequenceNumber) {
+      TableMetadata metadataToUpdate, Snapshot parent, long sequenceNumber, long timestampMillis) {
     throw new UnsupportedOperationException("v4 writes are not yet implemented");
   }
 
@@ -371,11 +372,13 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
 
     runValidations(parentSnapshot);
 
+    long timestampMillis = snapshotTimestampMillis(parentSnapshot);
+
     NewSnapshotMetadata result;
     if (base.formatVersion() < 4) {
       result = writeManifestList(parentSnapshot, sequenceNumber);
     } else {
-      result = writeRootManifest(base, parentSnapshot, sequenceNumber);
+      result = writeRootManifest(base, parentSnapshot, sequenceNumber, timestampMillis);
     }
 
     // keep track of the manifest lists created and the manifests they reference
@@ -409,7 +412,7 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
         sequenceNumber,
         snapshotId(),
         parentSnapshot == null ? null : parentSnapshot.snapshotId(),
-        snapshotTimestampMillis(parentSnapshot),
+        timestampMillis,
         operation(),
         summary(base),
         base.currentSchemaId(),

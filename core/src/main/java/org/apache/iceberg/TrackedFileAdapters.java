@@ -77,22 +77,13 @@ class TrackedFileAdapters {
     return new TrackedManifestFile(file);
   }
 
-  static TrackedFile asTrackedFile(ManifestFile file) {
-    if (file instanceof TrackedManifestFile wrapper) {
-      return wrapper.file();
-    }
-
-    return forManifestFile().wrap(file);
+  static TrackedFile asTrackedFile(ManifestFile file, long parentSnapshotTimestampMicros) {
+    return new ManifestTrackedFile(parentSnapshotTimestampMicros).wrap(file);
   }
 
   /** Returns a reusable adapter from {@link DataFile} to {@link TrackedFile}. */
   static DataTrackedFile forDataFile(Schema tableSchema) {
     return new DataTrackedFile(tableSchema);
-  }
-
-  /** Returns a reusable adapter from {@link ManifestFile} to {@link TrackedFile}. */
-  static ManifestTrackedFile forManifestFile() {
-    return new ManifestTrackedFile();
   }
 
   /** Shared base for data and delete file adapters. */
@@ -424,10 +415,6 @@ class TrackedFileAdapters {
       this.file = file;
     }
 
-    private TrackedFile file() {
-      return file;
-    }
-
     @Override
     public String path() {
       return file.location();
@@ -711,26 +698,21 @@ class TrackedFileAdapters {
   /** Adapts a {@link ManifestFile} to {@link TrackedFile}. */
   static class ManifestTrackedFile implements TrackedFile {
     private final WrappedManifestInfo manifestInfo = new WrappedManifestInfo();
-    private final WrappedManifestTracking trackingWrapper = new WrappedManifestTracking();
+    private final WrappedManifestTracking trackingWrapper;
     private Tracking tracking;
     private ManifestFile manifest;
     private long recordCount;
     private FileContent contentType;
 
-    ManifestTrackedFile() {}
+    ManifestTrackedFile(long parentSnapshotTimestampMicros) {
+      this.trackingWrapper = new WrappedManifestTracking(parentSnapshotTimestampMicros);
+    }
 
     /**
      * Re-points this adapter at {@code newManifest}. Converts the manifest's own fields only;
      * write-time tracking updates are applied by the versioned writer.
-     *
-     * <p>Returns the inner {@link TrackedFile} when {@code newManifest} is a {@link
-     * TrackedManifestFile}.
      */
     public TrackedFile wrap(ManifestFile newManifest) {
-      if (newManifest instanceof TrackedManifestFile tracked) {
-        return tracked.file();
-      }
-
       Preconditions.checkArgument(newManifest != null, "Invalid manifest file: null");
 
       this.manifest = newManifest;
@@ -992,6 +974,11 @@ class TrackedFileAdapters {
 
   private static class WrappedManifestTracking implements Tracking {
     private ManifestFile manifest = null;
+    private final long parentSnapshotTimestampMicros;
+
+    WrappedManifestTracking(long parentSnapshotTimestampMicros) {
+      this.parentSnapshotTimestampMicros = parentSnapshotTimestampMicros;
+    }
 
     WrappedManifestTracking wrap(ManifestFile newManifest) {
       this.manifest = newManifest;
@@ -1041,7 +1028,9 @@ class TrackedFileAdapters {
 
     @Override
     public Long snapshotTimestampMicros() {
-      return manifest.snapshotTimestampMicros();
+      // Pre-v4 manifests have no snapshot timestamp; the parent snapshot's bounds when they were
+      // last updated.
+      return parentSnapshotTimestampMicros;
     }
 
     @Override

@@ -23,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import org.apache.iceberg.exceptions.CommitFailedException;
 import org.apache.iceberg.io.OutputFile;
 import org.junit.jupiter.api.Test;
@@ -194,11 +195,15 @@ public class TestAppend extends AdaptiveMetadataTestBase {
     assertThat(latest.sequenceNumber()).isEqualTo(2);
     validateFiles(
         readRoot(defaultTable, latest),
+        contents(FileContent.DATA, FileContent.DATA),
         dataSeqs(2L, 1L),
         fileSeqs(2L, 1L),
         ids(pending.snapshotId(), concurrent.snapshotId()),
         locations(FILE_A, FILE_B),
-        statuses(EntryStatus.ADDED, EntryStatus.EXISTING));
+        statuses(EntryStatus.ADDED, EntryStatus.EXISTING),
+        timestamps(
+            TimeUnit.MILLISECONDS.toMicros(latest.timestampMillis()),
+            TimeUnit.MILLISECONDS.toMicros(concurrent.timestampMillis())));
 
     assertThat(listRootManifests(defaultTable))
         .containsExactlyInAnyOrder(
@@ -220,15 +225,17 @@ public class TestAppend extends AdaptiveMetadataTestBase {
     Snapshot snapshot = upgraded.currentSnapshot();
     long snapshotId = snapshot.snapshotId();
 
-    List<TrackedFile> rootFiles = readRoot(upgraded, snapshot);
     validateFiles(
-        rootFiles,
+        readRoot(upgraded, snapshot),
         contents(FileContent.DATA, FileContent.DATA_MANIFEST),
         dataSeqs(2L, 1L),
         fileSeqs(2L, 1L),
         ids(snapshotId, v3SnapshotId),
         locations(FILE_B.location(), v3Manifest.path()),
-        statuses(EntryStatus.ADDED, EntryStatus.EXISTING));
+        statuses(EntryStatus.ADDED, EntryStatus.EXISTING),
+        timestamps(
+            TimeUnit.MILLISECONDS.toMicros(snapshot.timestampMillis()),
+            TimeUnit.MILLISECONDS.toMicros(v3Snapshot.timestampMillis())));
   }
 
   @ParameterizedTest
@@ -240,7 +247,8 @@ public class TestAppend extends AdaptiveMetadataTestBase {
     table.newAppend().appendFile(FILE_B).commit();
 
     assertThat(table.currentSnapshot().allManifests(io)).hasSize(1);
-    ManifestFile preV3Manifest = table.currentSnapshot().allManifests(io).get(0);
+    Snapshot preUpgradeSnapshot = table.currentSnapshot();
+    ManifestFile preV3Manifest = preUpgradeSnapshot.allManifests(io).get(0);
 
     InMemoryTables.Table upgraded = upgrade("upgraded_table", 4);
     long firstRowId = upgraded.ops().current().nextRowId();
@@ -259,7 +267,8 @@ public class TestAppend extends AdaptiveMetadataTestBase {
         fileSeqs(preV3Manifest.sequenceNumber()),
         ids(preV3Manifest.snapshotId()),
         locations(preV3Manifest.path()),
-        statuses(EntryStatus.EXISTING));
+        statuses(EntryStatus.EXISTING),
+        timestamps(TimeUnit.MILLISECONDS.toMicros(preUpgradeSnapshot.timestampMillis())));
 
     assertThat(rootFiles)
         .extracting(file -> file.tracking().firstRowId())

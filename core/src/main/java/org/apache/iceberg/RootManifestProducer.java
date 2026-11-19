@@ -25,6 +25,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.iceberg.encryption.EncryptedOutputFile;
 import org.apache.iceberg.io.FileIO;
@@ -61,11 +62,17 @@ class RootManifestProducer {
     appendedDataFiles.add(TrackedFileAdapters.asTrackedFile(dataFile, ops.current().schema()));
   }
 
-  TrackedFile apply(TableMetadata base, Snapshot parent, long attemptSequenceNumber) {
+  TrackedFile apply(
+      TableMetadata base, Snapshot parent, long attemptSequenceNumber, long timestampMillis) {
     RootMetadata root = RootMetadata.fromSnapshot(base, parent, io);
 
     manifestLocations.clear();
-    V4ManifestWriter rootWriter = newRootWriter(base, attemptSequenceNumber, base.nextRowId());
+    V4ManifestWriter rootWriter =
+        newRootWriter(
+            base,
+            attemptSequenceNumber,
+            TimeUnit.MILLISECONDS.toMicros(timestampMillis),
+            base.nextRowId());
     try (rootWriter) {
       for (TrackedFile added : appendedDataFiles) {
         rootWriter.append(added);
@@ -119,7 +126,8 @@ class RootManifestProducer {
     return ops.encryption().encrypt(rawOutputFile);
   }
 
-  private V4ManifestWriter newRootWriter(TableMetadata base, long sequenceNumber, long firstRowId) {
+  private V4ManifestWriter newRootWriter(
+      TableMetadata base, long sequenceNumber, long snapshotTimestampMicros, long firstRowId) {
     // always use the latest stats type to prevent dropping stats from new files in the root
     Types.StructType statsType =
         StatsUtil.statsWriteSchema(base.schema(), MetricsConfig.forTable(base));
@@ -131,6 +139,7 @@ class RootManifestProducer {
         base.currentSchemaId(),
         snapshotId,
         sequenceNumber,
+        snapshotTimestampMicros,
         firstRowId);
   }
 
@@ -175,10 +184,15 @@ class RootManifestProducer {
       if (snapshot == null) {
         return null;
       } else if (snapshot.manifestListLocation() != null) {
+        long snapshotTimestampMicros = TimeUnit.MILLISECONDS.toMicros(snapshot.timestampMillis());
         List<TrackedFile> dataManifests =
-            Lists.transform(snapshot.dataManifests(io), TrackedFileAdapters::asTrackedFile);
+            Lists.transform(
+                snapshot.dataManifests(io),
+                manifest -> TrackedFileAdapters.asTrackedFile(manifest, snapshotTimestampMicros));
         List<TrackedFile> deleteManifests =
-            Lists.transform(snapshot.deleteManifests(io), TrackedFileAdapters::asTrackedFile);
+            Lists.transform(
+                snapshot.deleteManifests(io),
+                manifest -> TrackedFileAdapters.asTrackedFile(manifest, snapshotTimestampMicros));
         return new RootMetadata(ImmutableList.of(), dataManifests, deleteManifests);
       }
 

@@ -799,14 +799,6 @@ class TestTrackedFileAdapters {
         .isEqualTo(PARTITION);
   }
 
-  @Test
-  void manifestTrackedFileAdapterUnwrapsToOriginalTrackedFile() {
-    TrackedFile original = trackedFile(FileContent.DATA_MANIFEST);
-    ManifestFile adapted = TrackedFileAdapters.asManifestFile(original);
-    TrackedFile roundTripped = TrackedFileAdapters.forManifestFile().wrap(adapted);
-    assertThat(roundTripped).isSameAs(original);
-  }
-
   @ParameterizedTest
   @EnumSource(ManifestContent.class)
   void manifestTrackedFileAdapter(ManifestContent content) {
@@ -830,7 +822,7 @@ class TestTrackedFileAdapters {
             DELETED_FILES_COUNT,
             DELETED_ROWS_COUNT,
             content == ManifestContent.DATA ? FIRST_ROW_ID : null); // first row id
-    TrackedFile result = TrackedFileAdapters.forManifestFile().wrap(manifest);
+    TrackedFile result = TrackedFileAdapters.asTrackedFile(manifest, SNAPSHOT_TIMESTAMP_MICROS);
 
     assertThat(result.contentType()).isEqualTo(expectedContent);
     assertThat(result.manifestInfo().formatVersion()).isZero();
@@ -838,6 +830,7 @@ class TestTrackedFileAdapters {
     assertThat(result.fileFormat()).isEqualTo(FileFormat.AVRO);
     assertThat(result.tracking().status()).isEqualTo(EntryStatus.EXISTING);
     assertThat(result.tracking().snapshotId()).isEqualTo(SNAPSHOT_ID);
+    assertThat(result.tracking().snapshotTimestampMicros()).isEqualTo(SNAPSHOT_TIMESTAMP_MICROS);
     assertThat(result.tracking().firstRowId())
         .isEqualTo(content == ManifestContent.DATA ? FIRST_ROW_ID : null);
     assertThat(result.recordCount())
@@ -859,7 +852,7 @@ class TestTrackedFileAdapters {
   @EnumSource(InvalidCount.class)
   void manifestTrackedFileAdapterRejectsInvalidFilesCount(InvalidCount count) {
     ManifestFile manifest = newManifestFileWithInvalidCount(count);
-    assertThatThrownBy(() -> TrackedFileAdapters.forManifestFile().wrap(manifest))
+    assertThatThrownBy(() -> TrackedFileAdapters.asTrackedFile(manifest, SNAPSHOT_TIMESTAMP_MICROS))
         .isInstanceOf(count.exceptionType())
         .hasMessage("Cannot convert manifest %s: %s", MANIFEST_LOCATION, count.message());
   }

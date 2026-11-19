@@ -1102,7 +1102,7 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
 
   @Override
   protected NewSnapshotMetadata writeRootManifest(
-      TableMetadata base, Snapshot parent, long sequenceNumber) {
+      TableMetadata base, Snapshot parent, long sequenceNumber, long timestampMillis) {
     validateDeleteFilesForVersion(base.formatVersion());
 
     if (addsDeleteFiles()) {
@@ -1124,7 +1124,7 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
       this.hasNewDataFiles = false;
     }
 
-    TrackedFile result = rootManifestProducer.apply(base, parent, sequenceNumber);
+    TrackedFile result = rootManifestProducer.apply(base, parent, sequenceNumber, timestampMillis);
 
     summaryBuilder.clear();
     summaryBuilder.merge(addedDataFilesSummary);

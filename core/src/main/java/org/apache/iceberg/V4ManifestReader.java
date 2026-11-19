@@ -194,6 +194,12 @@ class V4ManifestReader extends CloseableGroup implements CloseableIterable<Track
       };
     }
 
+    Long snapshotTimestampMicros = manifest.snapshotTimestampMicros();
+    Preconditions.checkArgument(
+        snapshotTimestampMicros != null,
+        "Invalid snapshot timestamp for committed manifest %s: null",
+        manifest.path());
+
     Long firstRowId = manifest.firstRowId();
     if (firstRowId != null) {
       return new Function<>() {
@@ -202,7 +208,8 @@ class V4ManifestReader extends CloseableGroup implements CloseableIterable<Track
         @Override
         public TrackedFile apply(TrackedFile file) {
           TrackingStruct tracking = (TrackingStruct) file.tracking();
-          tracking.inherit(manifest.snapshotId(), manifest.sequenceNumber());
+          tracking.inherit(
+              manifest.snapshotId(), manifest.sequenceNumber(), snapshotTimestampMicros);
           if (file.contentType() == FileContent.DATA && tracking.assignFirstRowId(nextRowId)) {
             nextRowId += file.recordCount();
           }
@@ -215,7 +222,7 @@ class V4ManifestReader extends CloseableGroup implements CloseableIterable<Track
     // committed manifest with null manifest-level first row ID (pre-v3 upgrade path)
     return file -> {
       TrackingStruct tracking = (TrackingStruct) file.tracking();
-      tracking.inherit(manifest.snapshotId(), manifest.sequenceNumber());
+      tracking.inherit(manifest.snapshotId(), manifest.sequenceNumber(), snapshotTimestampMicros);
       tracking.assignFirstRowId(null);
       return file;
     };

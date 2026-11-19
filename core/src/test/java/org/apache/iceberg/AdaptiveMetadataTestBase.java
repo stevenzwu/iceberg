@@ -211,6 +211,10 @@ public class AdaptiveMetadataTestBase {
     return Iterators.forArray(ids);
   }
 
+  protected static Iterator<Long> timestamps(Long... timestamps) {
+    return Iterators.forArray(timestamps);
+  }
+
   protected static Iterator<String> locations(String... locations) {
     return Iterators.forArray(locations);
   }
@@ -263,6 +267,18 @@ public class AdaptiveMetadataTestBase {
       Iterator<Long> ids,
       Iterator<String> locations,
       Iterator<EntryStatus> statuses) {
+    validateFiles(files, contents, dataSeqs, fileSeqs, ids, locations, statuses, null);
+  }
+
+  protected void validateFiles(
+      List<TrackedFile> files,
+      Iterator<FileContent> contents,
+      Iterator<Long> dataSeqs,
+      Iterator<Long> fileSeqs,
+      Iterator<Long> ids,
+      Iterator<String> locations,
+      Iterator<EntryStatus> statuses,
+      Iterator<Long> timestamps) {
     for (TrackedFile file : files) {
       assertThat(file.contentType()).as("Content type").isEqualTo(contents.next());
       assertThat(file.location()).as("Location").isEqualTo(locations.next());
@@ -277,6 +293,12 @@ public class AdaptiveMetadataTestBase {
 
       if (statuses != null) {
         assertThat(file.tracking().status()).as("Status").isEqualTo(statuses.next());
+      }
+
+      if (timestamps != null) {
+        assertThat(file.tracking().snapshotTimestampMicros())
+            .as("Snapshot timestamp")
+            .isEqualTo(timestamps.next());
       }
     }
 
