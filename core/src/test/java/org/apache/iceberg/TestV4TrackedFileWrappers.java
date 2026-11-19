@@ -42,11 +42,13 @@ import org.junit.jupiter.params.provider.MethodSource;
 class TestV4TrackedFileWrappers {
   private static final long COMMIT_SNAPSHOT_ID = 42L;
   private static final long COMMIT_SEQ = 34L;
+  private static final long COMMIT_SNAPSHOT_TS = 1_700_000_000_123_456L;
   private static final long PREVIOUS_SNAPSHOT_ID = 7L;
   private static final long PREVIOUS_MODIFIED_SNAPSHOT_ID = 8L;
   private static final long PREVIOUS_DATA_SEQ = 6L;
   private static final long PREVIOUS_FILE_SEQ = 5L;
   private static final long PREVIOUS_FIRST_ROW_ID = 500L;
+  private static final long PREVIOUS_SNAPSHOT_TS = 1_600_000_000_123_456L;
   private static final long FIRST_ROW_ID = 1_000L;
   private static final String DATA_LOCATION = "s3://bucket/table/file.parquet";
   private static final String MANIFEST_LOCATION = "s3://bucket/table/manifest.parquet";
@@ -187,7 +189,12 @@ class TestV4TrackedFileWrappers {
 
     RootTrackedFileWrapper wrapper =
         new RootTrackedFileWrapper(
-            COMMIT_SNAPSHOT_ID, COMMIT_SEQ, UNPARTITIONED_SPECS, UNPARTITIONED_TYPE, NO_STATS_TYPE);
+            COMMIT_SNAPSHOT_ID,
+            COMMIT_SEQ,
+            COMMIT_SNAPSHOT_TS,
+            UNPARTITIONED_SPECS,
+            UNPARTITIONED_TYPE,
+            NO_STATS_TYPE);
     StructLike row =
         wrapper.wrap(manifest, TrackingBuilder.added(COMMIT_SNAPSHOT_ID).build(), FIRST_ROW_ID);
 
@@ -225,13 +232,20 @@ class TestV4TrackedFileWrappers {
 
     RootTrackedFileWrapper wrapper =
         new RootTrackedFileWrapper(
-            COMMIT_SNAPSHOT_ID, COMMIT_SEQ, UNPARTITIONED_SPECS, UNPARTITIONED_TYPE, NO_STATS_TYPE);
+            COMMIT_SNAPSHOT_ID,
+            COMMIT_SEQ,
+            COMMIT_SNAPSHOT_TS,
+            UNPARTITIONED_SPECS,
+            UNPARTITIONED_TYPE,
+            NO_STATS_TYPE);
     StructLike row =
         wrapper.wrap(file, TrackingBuilder.added(COMMIT_SNAPSHOT_ID).build(), FIRST_ROW_ID);
 
     assertThat(get(row, TRACKED_FILE_SCHEMA, Tracking.SEQUENCE_NUMBER)).isEqualTo(COMMIT_SEQ);
     assertThat(get(row, TRACKED_FILE_SCHEMA, Tracking.FILE_SEQUENCE_NUMBER)).isEqualTo(COMMIT_SEQ);
     assertThat(get(row, TRACKED_FILE_SCHEMA, Tracking.FIRST_ROW_ID)).isEqualTo(FIRST_ROW_ID);
+    assertThat(get(row, TRACKED_FILE_SCHEMA, Tracking.SNAPSHOT_TIMESTAMP))
+        .isEqualTo(COMMIT_SNAPSHOT_TS);
   }
 
   @Test
@@ -260,11 +274,13 @@ class TestV4TrackedFileWrappers {
   }
 
   @Test
-  void rootWritesCommitDataSequenceNumberForFileModifiedInCommit() {
+  void rootWritesCommitDataSequenceNumberAndTimestampForFileModifiedInCommit() {
     Tracking source = mock(Tracking.class);
     when(source.status()).thenReturn(EntryStatus.EXISTING);
     when(source.dataSequenceNumber()).thenReturn(PREVIOUS_DATA_SEQ);
     when(source.fileSequenceNumber()).thenReturn(PREVIOUS_FILE_SEQ);
+    when(source.firstRowId()).thenReturn(PREVIOUS_FIRST_ROW_ID);
+    when(source.snapshotTimestampMicros()).thenReturn(PREVIOUS_SNAPSHOT_TS);
 
     TrackedFile file = mock(TrackedFile.class);
     when(file.contentType()).thenReturn(FileContent.DATA);
@@ -276,12 +292,57 @@ class TestV4TrackedFileWrappers {
 
     RootTrackedFileWrapper wrapper =
         new RootTrackedFileWrapper(
-            COMMIT_SNAPSHOT_ID, COMMIT_SEQ, UNPARTITIONED_SPECS, UNPARTITIONED_TYPE, NO_STATS_TYPE);
+            COMMIT_SNAPSHOT_ID,
+            COMMIT_SEQ,
+            COMMIT_SNAPSHOT_TS,
+            UNPARTITIONED_SPECS,
+            UNPARTITIONED_TYPE,
+            NO_STATS_TYPE);
     StructLike row = wrapper.wrap(file, tracking, null /* assignedFirstRowId */);
 
     assertThat(get(row, TRACKED_FILE_SCHEMA, Tracking.SEQUENCE_NUMBER)).isEqualTo(COMMIT_SEQ);
     assertThat(get(row, TRACKED_FILE_SCHEMA, Tracking.FILE_SEQUENCE_NUMBER))
         .isEqualTo(PREVIOUS_FILE_SEQ);
+    assertThat(get(row, TRACKED_FILE_SCHEMA, Tracking.FIRST_ROW_ID))
+        .isEqualTo(PREVIOUS_FIRST_ROW_ID);
+    assertThat(get(row, TRACKED_FILE_SCHEMA, Tracking.SNAPSHOT_TIMESTAMP))
+        .isEqualTo(COMMIT_SNAPSHOT_TS);
+  }
+
+  @Test
+  void rootPreservesSnapshotTimestampForExistingFile() {
+    Tracking source =
+        new TrackingStruct(
+            EntryStatus.EXISTING,
+            PREVIOUS_SNAPSHOT_ID,
+            PREVIOUS_DATA_SEQ,
+            PREVIOUS_FILE_SEQ,
+            null, // modifiedSnapshotId
+            PREVIOUS_FIRST_ROW_ID,
+            null, // deletedPositions
+            null, // replacedPositions
+            PREVIOUS_SNAPSHOT_TS);
+
+    TrackedFile file = mock(TrackedFile.class);
+    when(file.contentType()).thenReturn(FileContent.DATA);
+    when(file.location()).thenReturn(DATA_LOCATION);
+
+    RootTrackedFileWrapper wrapper =
+        new RootTrackedFileWrapper(
+            COMMIT_SNAPSHOT_ID,
+            COMMIT_SEQ,
+            COMMIT_SNAPSHOT_TS,
+            UNPARTITIONED_SPECS,
+            UNPARTITIONED_TYPE,
+            NO_STATS_TYPE);
+    StructLike row =
+        wrapper.wrap(
+            file,
+            TrackingBuilder.from(source, COMMIT_SNAPSHOT_ID).build(),
+            null /* assignedFirstRowId */);
+
+    assertThat(get(row, TRACKED_FILE_SCHEMA, Tracking.SNAPSHOT_TIMESTAMP))
+        .isEqualTo(PREVIOUS_SNAPSHOT_TS);
   }
 
   @Test
@@ -350,7 +411,12 @@ class TestV4TrackedFileWrappers {
 
     RootTrackedFileWrapper wrapper =
         new RootTrackedFileWrapper(
-            COMMIT_SNAPSHOT_ID, COMMIT_SEQ, UNPARTITIONED_SPECS, UNPARTITIONED_TYPE, NO_STATS_TYPE);
+            COMMIT_SNAPSHOT_ID,
+            COMMIT_SEQ,
+            COMMIT_SNAPSHOT_TS,
+            UNPARTITIONED_SPECS,
+            UNPARTITIONED_TYPE,
+            NO_STATS_TYPE);
 
     assertThatThrownBy(() -> wrapper.wrap(file, tracking, null /* assignedFirstRowId */))
         .isInstanceOf(IllegalArgumentException.class)
@@ -384,7 +450,12 @@ class TestV4TrackedFileWrappers {
 
     RootTrackedFileWrapper wrapper =
         new RootTrackedFileWrapper(
-            COMMIT_SNAPSHOT_ID, COMMIT_SEQ, UNPARTITIONED_SPECS, UNPARTITIONED_TYPE, NO_STATS_TYPE);
+            COMMIT_SNAPSHOT_ID,
+            COMMIT_SEQ,
+            COMMIT_SNAPSHOT_TS,
+            UNPARTITIONED_SPECS,
+            UNPARTITIONED_TYPE,
+            NO_STATS_TYPE);
 
     assertThatThrownBy(() -> wrapper.wrap(file, tracking, FIRST_ROW_ID))
         .isInstanceOf(IllegalArgumentException.class)
@@ -403,7 +474,12 @@ class TestV4TrackedFileWrappers {
 
     RootTrackedFileWrapper wrapper =
         new RootTrackedFileWrapper(
-            COMMIT_SNAPSHOT_ID, COMMIT_SEQ, UNPARTITIONED_SPECS, UNPARTITIONED_TYPE, NO_STATS_TYPE);
+            COMMIT_SNAPSHOT_ID,
+            COMMIT_SEQ,
+            COMMIT_SNAPSHOT_TS,
+            UNPARTITIONED_SPECS,
+            UNPARTITIONED_TYPE,
+            NO_STATS_TYPE);
 
     Long firstRowId = content == FileContent.DATA_MANIFEST ? FIRST_ROW_ID : null;
 
@@ -428,7 +504,12 @@ class TestV4TrackedFileWrappers {
 
     RootTrackedFileWrapper wrapper =
         new RootTrackedFileWrapper(
-            COMMIT_SNAPSHOT_ID, COMMIT_SEQ, UNPARTITIONED_SPECS, UNPARTITIONED_TYPE, NO_STATS_TYPE);
+            COMMIT_SNAPSHOT_ID,
+            COMMIT_SEQ,
+            COMMIT_SNAPSHOT_TS,
+            UNPARTITIONED_SPECS,
+            UNPARTITIONED_TYPE,
+            NO_STATS_TYPE);
 
     Long firstRowId = content == FileContent.DATA_MANIFEST ? FIRST_ROW_ID : null;
 
@@ -467,7 +548,12 @@ class TestV4TrackedFileWrappers {
 
     RootTrackedFileWrapper wrapper =
         new RootTrackedFileWrapper(
-            COMMIT_SNAPSHOT_ID, COMMIT_SEQ, UNPARTITIONED_SPECS, UNPARTITIONED_TYPE, NO_STATS_TYPE);
+            COMMIT_SNAPSHOT_ID,
+            COMMIT_SEQ,
+            COMMIT_SNAPSHOT_TS,
+            UNPARTITIONED_SPECS,
+            UNPARTITIONED_TYPE,
+            NO_STATS_TYPE);
 
     assertThatThrownBy(() -> wrapper.wrap(file, tracking, FIRST_ROW_ID))
         .isInstanceOf(IllegalArgumentException.class)
@@ -487,7 +573,12 @@ class TestV4TrackedFileWrappers {
 
     RootTrackedFileWrapper wrapper =
         new RootTrackedFileWrapper(
-            COMMIT_SNAPSHOT_ID, COMMIT_SEQ, UNPARTITIONED_SPECS, UNPARTITIONED_TYPE, NO_STATS_TYPE);
+            COMMIT_SNAPSHOT_ID,
+            COMMIT_SEQ,
+            COMMIT_SNAPSHOT_TS,
+            UNPARTITIONED_SPECS,
+            UNPARTITIONED_TYPE,
+            NO_STATS_TYPE);
 
     assertThatThrownBy(() -> wrapper.wrap(file, tracking, FIRST_ROW_ID))
         .isInstanceOf(IllegalArgumentException.class)
@@ -531,7 +622,12 @@ class TestV4TrackedFileWrappers {
 
     RootTrackedFileWrapper wrapper =
         new RootTrackedFileWrapper(
-            COMMIT_SNAPSHOT_ID, COMMIT_SEQ, UNPARTITIONED_SPECS, UNPARTITIONED_TYPE, NO_STATS_TYPE);
+            COMMIT_SNAPSHOT_ID,
+            COMMIT_SEQ,
+            COMMIT_SNAPSHOT_TS,
+            UNPARTITIONED_SPECS,
+            UNPARTITIONED_TYPE,
+            NO_STATS_TYPE);
 
     assertThatThrownBy(() -> wrapper.wrap(file, tracking, null /* assignedFirstRowId */))
         .isInstanceOf(IllegalArgumentException.class)
@@ -573,7 +669,12 @@ class TestV4TrackedFileWrappers {
 
     RootTrackedFileWrapper wrapper =
         new RootTrackedFileWrapper(
-            COMMIT_SNAPSHOT_ID, COMMIT_SEQ, UNPARTITIONED_SPECS, UNPARTITIONED_TYPE, NO_STATS_TYPE);
+            COMMIT_SNAPSHOT_ID,
+            COMMIT_SEQ,
+            COMMIT_SNAPSHOT_TS,
+            UNPARTITIONED_SPECS,
+            UNPARTITIONED_TYPE,
+            NO_STATS_TYPE);
 
     assertThatThrownBy(() -> wrapper.wrap(file, tracking, null /* assignedFirstRowId */))
         .isInstanceOf(IllegalArgumentException.class)
@@ -594,7 +695,12 @@ class TestV4TrackedFileWrappers {
 
     RootTrackedFileWrapper wrapper =
         new RootTrackedFileWrapper(
-            COMMIT_SNAPSHOT_ID, COMMIT_SEQ, UNPARTITIONED_SPECS, UNPARTITIONED_TYPE, NO_STATS_TYPE);
+            COMMIT_SNAPSHOT_ID,
+            COMMIT_SEQ,
+            COMMIT_SNAPSHOT_TS,
+            UNPARTITIONED_SPECS,
+            UNPARTITIONED_TYPE,
+            NO_STATS_TYPE);
 
     assertThatThrownBy(
             () ->
@@ -620,7 +726,12 @@ class TestV4TrackedFileWrappers {
 
     RootTrackedFileWrapper wrapper =
         new RootTrackedFileWrapper(
-            COMMIT_SNAPSHOT_ID, COMMIT_SEQ, UNPARTITIONED_SPECS, UNPARTITIONED_TYPE, NO_STATS_TYPE);
+            COMMIT_SNAPSHOT_ID,
+            COMMIT_SEQ,
+            COMMIT_SNAPSHOT_TS,
+            UNPARTITIONED_SPECS,
+            UNPARTITIONED_TYPE,
+            NO_STATS_TYPE);
 
     assertThatThrownBy(() -> wrapper.wrap(file, tracking, FIRST_ROW_ID))
         .isInstanceOf(IllegalArgumentException.class)
@@ -636,7 +747,12 @@ class TestV4TrackedFileWrappers {
 
     RootTrackedFileWrapper wrapper =
         new RootTrackedFileWrapper(
-            COMMIT_SNAPSHOT_ID, COMMIT_SEQ, UNPARTITIONED_SPECS, UNPARTITIONED_TYPE, NO_STATS_TYPE);
+            COMMIT_SNAPSHOT_ID,
+            COMMIT_SEQ,
+            COMMIT_SNAPSHOT_TS,
+            UNPARTITIONED_SPECS,
+            UNPARTITIONED_TYPE,
+            NO_STATS_TYPE);
 
     assertThatThrownBy(
             () ->
@@ -711,6 +827,59 @@ class TestV4TrackedFileWrappers {
         .hasMessage(
             "Found invalid snapshot ID for MODIFIED file: %s (committing %s)",
             PREVIOUS_MODIFIED_SNAPSHOT_ID, COMMIT_SNAPSHOT_ID);
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = EntryStatus.class,
+      names = {"EXISTING", "DELETED", "REPLACED"})
+  void leafRejectsNullSnapshotTimestampForStatus(EntryStatus status) {
+    TrackedFile file = mock(TrackedFile.class);
+    when(file.contentType()).thenReturn(FileContent.DATA);
+    when(file.location()).thenReturn(DATA_LOCATION);
+
+    Tracking tracking = mock(Tracking.class);
+    when(tracking.status()).thenReturn(status);
+    when(tracking.dataSequenceNumber()).thenReturn(5L);
+    when(tracking.snapshotTimestampMicros()).thenReturn(null);
+
+    LeafTrackedFileWrapper wrapper =
+        new LeafTrackedFileWrapper(
+            COMMIT_SNAPSHOT_ID, UNPARTITIONED_SPECS, UNPARTITIONED_TYPE, NO_STATS_TYPE);
+
+    assertThatThrownBy(() -> wrapper.wrap(file, tracking))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("Invalid snapshot timestamp (null) for %s file", status);
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = EntryStatus.class,
+      names = {"EXISTING", "DELETED", "REPLACED"})
+  void rootRejectsNullSnapshotTimestampForStatus(EntryStatus status) {
+    TrackedFile file = mock(TrackedFile.class);
+    when(file.contentType()).thenReturn(FileContent.DATA);
+    when(file.location()).thenReturn(DATA_LOCATION);
+
+    Tracking tracking = mock(Tracking.class);
+    when(tracking.status()).thenReturn(status);
+    when(tracking.snapshotId()).thenReturn(PREVIOUS_SNAPSHOT_ID);
+    when(tracking.dataSequenceNumber()).thenReturn(PREVIOUS_DATA_SEQ);
+    when(tracking.firstRowId()).thenReturn(PREVIOUS_FIRST_ROW_ID);
+    when(tracking.snapshotTimestampMicros()).thenReturn(null);
+
+    RootTrackedFileWrapper wrapper =
+        new RootTrackedFileWrapper(
+            COMMIT_SNAPSHOT_ID,
+            COMMIT_SEQ,
+            COMMIT_SNAPSHOT_TS,
+            UNPARTITIONED_SPECS,
+            UNPARTITIONED_TYPE,
+            NO_STATS_TYPE);
+
+    assertThatThrownBy(() -> wrapper.wrap(file, tracking, null /* assignedFirstRowId */))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("Invalid snapshot timestamp (null) for %s file", status);
   }
 
   @Test
