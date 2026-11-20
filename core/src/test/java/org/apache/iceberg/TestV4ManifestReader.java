@@ -2047,14 +2047,26 @@ class TestV4ManifestReader {
     V4ManifestReader.Builder builder =
         V4ManifestReader.builder(manifest, IO, schema, UNPARTITIONED_SPECS)
             .metricsConfig(metricsConfig)
-            // selecting m still reads the full geometry and geography bound structs
             .select(
                 "content_stats.geom.lower_bound.m",
+                "content_stats.geom.upper_bound.y",
                 "content_stats.geom.upper_bound.m",
                 "content_stats.geog.lower_bound.m",
+                "content_stats.geog.upper_bound.y",
                 "content_stats.geog.upper_bound.m");
 
-    assertGeospatialBounds(readOne(builder), geomLower, geomUpper, geogLower, geogUpper);
+    TrackedFile actual = readOne(builder);
+    assertBound(
+        actual,
+        1,
+        GeospatialBound.createXYM(Double.NaN, Double.NaN, 4.0),
+        GeospatialBound.createXYM(Double.NaN, 6.0, 8.0));
+    // geography bounds have no m in the file
+    assertBound(
+        actual,
+        2,
+        GeospatialBound.createXY(Double.NaN, Double.NaN),
+        GeospatialBound.createXY(Double.NaN, 40.0));
   }
 
   private static ContentStats contentStats(

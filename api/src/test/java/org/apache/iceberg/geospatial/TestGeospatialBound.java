@@ -18,12 +18,15 @@
  */
 package org.apache.iceberg.geospatial;
 
+import static org.apache.iceberg.types.Types.NestedField.optional;
+import static org.apache.iceberg.types.Types.NestedField.required;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import org.apache.iceberg.StructLike;
+import org.apache.iceberg.types.Types;
 import org.apache.iceberg.util.ByteBuffers;
 import org.junit.jupiter.api.Test;
 
@@ -147,6 +150,72 @@ public class TestGeospatialBound {
     assertThatThrownBy(() -> bound.set(1, null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("Invalid y coordinate: null");
+  }
+
+  @Test
+  public void projectedXY() {
+    Types.StructType projected =
+        Types.StructType.of(
+            required(10, "x", Types.DoubleType.get(), "Bounding box westernmost/xmin"),
+            required(11, "y", Types.DoubleType.get(), "Bounding box southernmost/ymin"));
+    GeospatialBound bound = new GeospatialBound(projected);
+
+    assertThat(bound.size()).isEqualTo(2);
+    bound.set(0, 1.0);
+    bound.set(1, 2.0);
+    assertThat(bound.x()).isEqualTo(1.0);
+    assertThat(bound.y()).isEqualTo(2.0);
+    assertThat(bound.hasZ()).isFalse();
+    assertThat(bound.hasM()).isFalse();
+  }
+
+  @Test
+  public void projectedZM() {
+    Types.StructType projected =
+        Types.StructType.of(
+            optional(12, "z", Types.DoubleType.get(), "Bounding box zmin"),
+            optional(13, "m", Types.DoubleType.get(), "Bounding box mmin"));
+    GeospatialBound bound = new GeospatialBound(projected);
+
+    assertThat(bound.size()).isEqualTo(2);
+    bound.set(0, 3.0);
+    bound.set(1, 4.0);
+    assertThat(bound.get(0, Double.class)).isEqualTo(3.0);
+    assertThat(bound.get(1, Double.class)).isEqualTo(4.0);
+    assertThat(bound.z()).isEqualTo(3.0);
+    assertThat(bound.m()).isEqualTo(4.0);
+    assertThat(Double.isNaN(bound.x())).isTrue();
+    assertThat(Double.isNaN(bound.y())).isTrue();
+  }
+
+  @Test
+  public void projectedM() {
+    Types.StructType projected =
+        Types.StructType.of(optional(13, "m", Types.DoubleType.get(), "Bounding box mmin"));
+    GeospatialBound bound = new GeospatialBound(projected);
+
+    assertThat(bound.size()).isEqualTo(1);
+    bound.set(0, 4.0);
+    assertThat(bound.get(0, Double.class)).isEqualTo(4.0);
+    assertThat(bound.m()).isEqualTo(4.0);
+    assertThat(Double.isNaN(bound.x())).isTrue();
+    assertThat(Double.isNaN(bound.y())).isTrue();
+    assertThat(bound.hasZ()).isFalse();
+    assertThat(bound.hasM()).isTrue();
+  }
+
+  @Test
+  public void copyProjectedM() {
+    Types.StructType projected =
+        Types.StructType.of(optional(13, "m", Types.DoubleType.get(), "Bounding box mmin"));
+    GeospatialBound bound = new GeospatialBound(projected);
+    bound.set(0, 4.0);
+
+    GeospatialBound copy = bound.copy();
+    assertThat(copy).isEqualTo(bound).isNotSameAs(bound);
+    assertThat(copy.size()).isEqualTo(1);
+    assertThat(copy.get(0, Double.class)).isEqualTo(4.0);
+    assertThat(copy.m()).isEqualTo(4.0);
   }
 
   @Test

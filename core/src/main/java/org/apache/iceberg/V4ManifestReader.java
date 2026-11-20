@@ -553,8 +553,7 @@ class V4ManifestReader extends CloseableGroup implements CloseableIterable<Track
         return RestoreColumns.restore(
             tableManifestSchema,
             requestedProjection,
-            idsToRestore(
-                projectsPartition(includePartition, requestedProjection), requestedProjection));
+            idsToRestore(projectsPartition(includePartition, requestedProjection)));
       }
 
       if (requestedColumns != null) {
@@ -566,7 +565,7 @@ class V4ManifestReader extends CloseableGroup implements CloseableIterable<Track
         return RestoreColumns.restore(
             tableManifestSchema,
             projection,
-            idsToRestore(projectsPartition(includePartition, projection), projection));
+            idsToRestore(projectsPartition(includePartition, projection)));
       }
 
       return tableManifestSchema;
@@ -577,7 +576,7 @@ class V4ManifestReader extends CloseableGroup implements CloseableIterable<Track
     }
 
     /** Return a set of manifest field IDs that should be projected. */
-    private Set<Integer> idsToRestore(boolean includePartition, Schema projection) {
+    private Set<Integer> idsToRestore(boolean includePartition) {
       Set<Integer> ids = Sets.newHashSet(REQUIRED_COLUMN_IDS);
 
       // project the full stats struct that corresponds to each field for which stats are needed
@@ -593,34 +592,7 @@ class V4ManifestReader extends CloseableGroup implements CloseableIterable<Track
         ids.add(TrackedFile.PARTITION_ID);
       }
 
-      // A partial geo bound must be read whole: GeospatialBound positions are fixed and NaN means
-      // absent in the file.
-      addProjectedGeoBounds(projection, ids);
-
       return ids;
-    }
-
-    private static void addProjectedGeoBounds(Schema projection, Set<Integer> ids) {
-      Types.NestedField contentStatsField = projection.findField(TrackedFile.CONTENT_STATS_ID);
-      if (contentStatsField == null || !contentStatsField.type().isStructType()) {
-        return;
-      }
-
-      for (Types.NestedField fieldStats : contentStatsField.type().asStructType().fields()) {
-        if (!fieldStats.type().isStructType()) {
-          continue;
-        }
-
-        Types.StructType struct = fieldStats.type().asStructType();
-        addGeoBoundId(struct.field(StatsUtil.LOWER_BOUND_NAME), ids);
-        addGeoBoundId(struct.field(StatsUtil.UPPER_BOUND_NAME), ids);
-      }
-    }
-
-    private static void addGeoBoundId(Types.NestedField bound, Set<Integer> ids) {
-      if (bound != null && bound.type().isStructType()) {
-        ids.add(bound.fieldId());
-      }
     }
 
     /** Return a set of table field IDs for which stats are needed. */

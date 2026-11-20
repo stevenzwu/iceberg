@@ -21,9 +21,11 @@ package org.apache.iceberg.geospatial;
 import java.io.Serializable;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.List;
 import java.util.Objects;
 import org.apache.iceberg.StructLike;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
+import org.apache.iceberg.types.Types;
 
 /**
  * Represents a geospatial bound (minimum or maximum) for Iceberg tables.
@@ -205,6 +207,8 @@ public class GeospatialBound implements StructLike, Serializable {
     return new GeospatialBound(x, y, Double.NaN, m);
   }
 
+  private static final int[] XYZM = new int[] {0, 1, 2, 3};
+
   @SuppressWarnings("MemberName")
   private double x;
 
@@ -217,17 +221,30 @@ public class GeospatialBound implements StructLike, Serializable {
   @SuppressWarnings("MemberName")
   private double m;
 
+  private final int[] posToCoord;
+
   private GeospatialBound() {
     this(Double.NaN, Double.NaN, Double.NaN, Double.NaN);
+  }
+
+  /** Creates a bound whose positions follow the given, possibly projected, bound struct. */
+  GeospatialBound(Types.StructType struct) {
+    this(Double.NaN, Double.NaN, Double.NaN, Double.NaN, posToCoord(struct));
   }
 
   /** Private constructor - use factory methods instead. */
   @SuppressWarnings("ParameterName")
   private GeospatialBound(double x, double y, double z, double m) {
+    this(x, y, z, m, XYZM);
+  }
+
+  @SuppressWarnings("ParameterName")
+  private GeospatialBound(double x, double y, double z, double m, int[] posToCoord) {
     this.x = x;
     this.y = y;
     this.z = z;
     this.m = m;
+    this.posToCoord = posToCoord;
   }
 
   /**
@@ -290,34 +307,22 @@ public class GeospatialBound implements StructLike, Serializable {
 
   /** Returns a new bound with the same coordinates. */
   public GeospatialBound copy() {
-    return new GeospatialBound(x, y, z, m);
+    return new GeospatialBound(x, y, z, m, posToCoord);
   }
 
   @Override
   public int size() {
-    return 4;
+    return posToCoord.length;
   }
 
   @Override
   public <T> T get(int pos, Class<T> javaClass) {
-    return switch (pos) {
-      case 0 -> javaClass.cast(x);
-      case 1 -> javaClass.cast(y);
-      case 2 -> hasZ() ? javaClass.cast(z) : null;
-      case 3 -> hasM() ? javaClass.cast(m) : null;
-      default -> throw new IllegalArgumentException("Invalid position: " + pos);
-    };
+    return getCoord(posToCoord[pos], javaClass);
   }
 
   @Override
   public <T> void set(int pos, T value) {
-    switch (pos) {
-      case 0 -> this.x = requiredCoordinate("x", value);
-      case 1 -> this.y = requiredCoordinate("y", value);
-      case 2 -> this.z = optionalCoordinate(value);
-      case 3 -> this.m = optionalCoordinate(value);
-      default -> throw new IllegalArgumentException("Invalid position: " + pos);
-    }
+    setCoord(posToCoord[pos], value);
   }
 
   @Override
@@ -358,6 +363,46 @@ public class GeospatialBound implements StructLike, Serializable {
   @Override
   public int hashCode() {
     return Objects.hash(x, y, z, m);
+  }
+
+  private <T> T getCoord(int coord, Class<T> javaClass) {
+    return switch (coord) {
+      case 0 -> javaClass.cast(x);
+      case 1 -> javaClass.cast(y);
+      case 2 -> hasZ() ? javaClass.cast(z) : null;
+      case 3 -> hasM() ? javaClass.cast(m) : null;
+      default -> throw new IllegalArgumentException("Invalid coordinate: " + coord);
+    };
+  }
+
+  private <T> void setCoord(int coord, T value) {
+    switch (coord) {
+      case 0 -> this.x = requiredCoordinate("x", value);
+      case 1 -> this.y = requiredCoordinate("y", value);
+      case 2 -> this.z = optionalCoordinate(value);
+      case 3 -> this.m = optionalCoordinate(value);
+      default -> throw new IllegalArgumentException("Invalid coordinate: " + coord);
+    }
+  }
+
+  private static int[] posToCoord(Types.StructType struct) {
+    List<Types.NestedField> fields = struct.fields();
+    int[] mapping = new int[fields.size()];
+    for (int i = 0; i < mapping.length; i += 1) {
+      mapping[i] = coordinate(fields.get(i).name());
+    }
+
+    return mapping;
+  }
+
+  private static int coordinate(String name) {
+    return switch (name) {
+      case "x" -> 0;
+      case "y" -> 1;
+      case "z" -> 2;
+      case "m" -> 3;
+      default -> throw new IllegalArgumentException("Invalid geospatial bound field: " + name);
+    };
   }
 
   private static double requiredCoordinate(String coordinate, Object value) {
